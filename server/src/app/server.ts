@@ -117,6 +117,10 @@ export function createApp(deps: AppDeps): App {
     orchestrator,
     clock,
     householdId: config.household.id,
+    sinkTiming: {
+      startDelayMs: config.tts.startDelayMs ?? 200,
+      leadingSilenceMs: config.tts.leadingSilenceMs ?? 60,
+    },
     config: {
       followUpSeconds: config.conversation.followUpSeconds,
       speechStartTimeoutSeconds: config.conversation.speechStartTimeoutSeconds,

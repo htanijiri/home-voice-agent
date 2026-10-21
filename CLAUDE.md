@@ -65,6 +65,7 @@ home-voice-agent：M5Stack（AtomS3R＋Voice Pyramid）を、クラウドの LLM
 - `server/src/app/hub.ts` の「audioOpen でないときの listen を無視」：会話を終えた直後に端末が送る listen start を受けると、待機中の端末に「聞き取れませんでした」と話しかけ続ける。
 - `server/src/transports/xiaozhi/opus.ts` の `sendPaced` の最後の 100ms：UDP の音声が「読み上げ終了」より後に着くと端末に捨てられる。
 - `server/src/app/server.ts` の close で WebSocket の接続を切る処理：切らないとサーバーの停止が終わらない。
+- `server/src/transports/xiaozhi/link.ts` の、最初の音声を送る前の待ち（`startDelayMs`）と先頭の無音（`leadingSilenceMs`）：端末は「話し中」に切り替わるときに再生待ちの音声を捨てるので、なくすと返事の先頭の1〜2文字が欠ける。
 
 ## コマンド
 サーバー（`server/`）

@@ -4,7 +4,7 @@ import type { Clock, SpeechToText, TextToSpeech } from "../core/ports.js";
 import { type SessionHooks, VoiceSession, type VoiceSessionConfig } from "../core/voice-session.js";
 import { errorFields, log } from "../log.js";
 import { McpClient } from "../transports/xiaozhi/mcp.js";
-import { type DeviceLink, OpusDecoder, XiaozhiSink } from "../transports/xiaozhi/link.js";
+import { type DeviceLink, OpusDecoder, type SinkTiming, XiaozhiSink } from "../transports/xiaozhi/link.js";
 
 export interface HubDeps {
   stt: SpeechToText;
@@ -14,6 +14,8 @@ export interface HubDeps {
   config: VoiceSessionConfig;
   householdId: string;
   hooks?: SessionHooks;
+  /** 読み上げの音声を送り始めるときの間合い（省略時は既定値） */
+  sinkTiming?: SinkTiming;
 }
 
 interface DeviceState {
@@ -92,7 +94,7 @@ export class DeviceHub {
     if (st.link && st.link !== link) this.detach(st.link);
     st.link = link;
     st.sink?.close();
-    st.sink = new XiaozhiSink(link);
+    st.sink = new XiaozhiSink(link, this.deps.sinkTiming);
     st.session.attachSink(st.sink);
     st.mcp.rebind((payload) => link.sendJson({ session_id: link.sessionId, type: "mcp", payload }));
     st.lastSeenAt = Date.now();

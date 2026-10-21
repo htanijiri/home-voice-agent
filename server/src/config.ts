@@ -13,7 +13,15 @@ export interface AppConfig {
   mqtt: { publicEndpoint: string; port: number; udpPublicHost: string; udpPort: number };
   llm: { model: string; maxTokens: number; effort: "low" | "medium" | "high" };
   stt: { location: string; model: string; languageCode: string };
-  tts: { voice: string; languageCode: string; speakingRate: number };
+  tts: {
+    voice: string;
+    languageCode: string;
+    speakingRate: number;
+    /** tts start から最初の音声を送るまで待つ時間（ミリ秒） */
+    startDelayMs?: number;
+    /** 読み上げの先頭に足す無音（ミリ秒） */
+    leadingSilenceMs?: number;
+  };
   conversation: {
     followUpSeconds: number;
     speechStartTimeoutSeconds: number;

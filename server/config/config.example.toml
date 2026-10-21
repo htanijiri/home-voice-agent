@@ -36,6 +36,11 @@ languageCode = "ja-JP"
 voice = "ja-JP-Chirp3-HD-Aoede"
 languageCode = "ja-JP"
 speakingRate = 1.05
+# 返事の最初の音声を送る前に待つ時間（ミリ秒）。端末は「話し中」に切り替わる前に届いた音声を捨てるため、
+# 待たないと返事の先頭の1〜2文字が欠ける
+startDelayMs = 200
+# 返事の先頭に足す無音（ミリ秒）。端末のスピーカーの立ち上がりで先頭が欠けないようにする
+leadingSilenceMs = 60
 
 [conversation]
 followUpSeconds = 8
