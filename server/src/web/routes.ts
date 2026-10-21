@@ -14,6 +14,8 @@ import { LoginError, SESSION_DAYS, type WebAuth } from "./auth.js";
 import { renderLoginPage, renderAppPage } from "./page.js";
 
 const COOKIE = "hva_session";
+/** 変更の通知（SSE）のハートビートの間隔。Fly のプロキシのアイドル切断より短くする */
+export const EVENTS_HEARTBEAT_MS = 25_000;
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -25,7 +27,7 @@ class BadRequest extends UserError {}
 
 export async function registerWeb(
   http: FastifyInstance,
-  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage">,
+  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage" | "changes">,
   auth: WebAuth,
   config: AppConfig,
   clock: Clock,
@@ -114,6 +116,27 @@ export async function registerWeb(
     };
 
     scope.get("/me", async (req) => ({ email: req.user!.email }));
+
+    // 変更の通知（Server-Sent Events）。画面はこれを受けて一覧を読み直す
+    scope.get("/events", (_req, reply) => {
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-store",
+        Connection: "keep-alive",
+      });
+      res.write("retry: 3000\n\n");
+      const unsubscribe = app.changes.subscribe((householdId, topic) => {
+        if (householdId === hh) res.write(`event: ${topic}\ndata: {}\n\n`);
+      });
+      const heartbeat = setInterval(() => res.write(": ping\n\n"), EVENTS_HEARTBEAT_MS);
+      // req の close は本文を読み終えた時点で来るので、res の close（接続が切れた）で片付ける
+      res.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    });
 
     // 買い物リスト
     scope.get("/shopping", async () => ({

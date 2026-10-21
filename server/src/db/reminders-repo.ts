@@ -33,9 +33,11 @@ export interface DeliveryRow {
 const toReminder = (r: ReminderRow): Reminder => ({ ...r, schedule: JSON.parse(r.schedule) as Schedule });
 
 export class RemindersRepo {
+  /** onChange：一覧の表示が変わったときに呼ぶ（確認画面への通知） */
   constructor(
     private readonly db: Db,
     private readonly tz: string,
+    private readonly onChange: (householdId: string) => void = () => undefined,
   ) {}
 
   create(householdId: string, title: string, schedule: Schedule, next: Date, now: Date): Reminder {
@@ -45,6 +47,7 @@ export class RemindersRepo {
         "INSERT INTO reminders (household_id, title, schedule, next_fire_at, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
       )
       .run(householdId, title.trim(), JSON.stringify(schedule), next.toISOString(), ts, ts);
+    this.onChange(householdId);
     return this.get(householdId, Number(r.lastInsertRowid))!;
   }
 
@@ -75,6 +78,7 @@ export class RemindersRepo {
         now.toISOString(),
         id,
       );
+    this.onChange(householdId);
     return this.get(householdId, id)!;
   }
 
@@ -84,12 +88,14 @@ export class RemindersRepo {
       .run(now.toISOString(), householdId, id);
     // まだ読み上げていない分も取り消す
     this.db.prepare("UPDATE reminder_deliveries SET state = 'skipped' WHERE reminder_id = ? AND state = 'pending'").run(id);
+    this.onChange(householdId);
   }
 
   setSkipNext(householdId: string, id: number, skip: boolean, now: Date): void {
     this.db
       .prepare("UPDATE reminders SET skip_next = ?, updated_at = ? WHERE household_id = ? AND id = ?")
       .run(skip ? 1 : 0, now.toISOString(), householdId, id);
+    this.onChange(householdId);
   }
 
   /** 時刻が来たリマインダー */
@@ -106,7 +112,7 @@ export class RemindersRepo {
    * 「次の1回だけ休む」が付いていれば、記録は skipped にする。
    */
   takeDue(r: Reminder): DeliveryRow | undefined {
-    return this.db.transaction((): DeliveryRow | undefined => {
+    const row = this.db.transaction((): DeliveryRow | undefined => {
       const scheduledAt = r.next_fire_at!;
       const state: DeliveryState = r.skip_next ? "skipped" : "pending";
       this.db
@@ -120,6 +126,8 @@ export class RemindersRepo {
         .prepare("SELECT * FROM reminder_deliveries WHERE reminder_id = ? AND scheduled_at = ?")
         .get(r.id, scheduledAt) as DeliveryRow;
     })();
+    this.onChange(r.household_id);
+    return row;
   }
 
   deliveries(states: DeliveryState[]): DeliveryRow[] {

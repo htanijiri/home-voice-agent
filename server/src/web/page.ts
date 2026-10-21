@@ -225,5 +225,20 @@ $('#conv-delete').addEventListener('click', async () => { if (confirm('会話の
 $('#logout').addEventListener('click', async () => { await fetch('/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': CSRF } }).catch(() => {}); location.href = '/login'; });
 function load(tab) { ({ shopping: loadShopping, reminders: loadReminders, more: loadMore })[tab]().catch(() => {}); }
 load('shopping');
+// 声や別のスマホでの変更を、サーバーからの知らせ（SSE）で受けて、表示中のタブを読み直す
+const currentTab = () => document.querySelector('nav button[aria-selected=true]').dataset.tab;
+function reloadSoon(tab) { if (tab && tab !== currentTab()) return; clearTimeout(reloadSoon.t); reloadSoon.t = setTimeout(() => load(currentTab()), 300); }
+function listen() {
+  const es = new EventSource('/api/events');
+  let opened = false;
+  es.addEventListener('shopping', () => reloadSoon('shopping'));
+  es.addEventListener('reminders', () => reloadSoon('reminders'));
+  // つながり直したときは、切れていた間の変更を取りこぼさないよう読み直す
+  es.addEventListener('open', () => { if (opened) reloadSoon(); opened = true; });
+  // 503 などで閉じられると自動ではつながり直さないので、少し待って作り直す
+  es.addEventListener('error', () => { if (es.readyState === EventSource.CLOSED) setTimeout(() => { listen(); reloadSoon(); }, 5000); });
+}
+listen();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reloadSoon(); });
 </script></body></html>`;
 }

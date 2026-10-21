@@ -27,7 +27,11 @@ export function normalizeName(name: string): string {
 export const BOUGHT_KEEP_DAYS = 7;
 
 export class ShoppingRepo {
-  constructor(private readonly db: Db) {}
+  /** onChange：内容が変わったときに呼ぶ（確認画面への通知） */
+  constructor(
+    private readonly db: Db,
+    private readonly onChange: (householdId: string) => void = () => undefined,
+  ) {}
 
   active(householdId: string): ShoppingItem[] {
     return this.db
@@ -69,6 +73,7 @@ export class ShoppingRepo {
         "INSERT INTO shopping_items (household_id, name, normalized_name, note, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
       )
       .run(householdId, trimmed, normalizeName(trimmed), note?.trim() || null, ts, ts);
+    this.onChange(householdId);
     return { item: this.get(householdId, Number(r.lastInsertRowid))!, existed: false };
   }
 
@@ -80,6 +85,7 @@ export class ShoppingRepo {
     this.db
       .prepare("UPDATE shopping_items SET name = ?, normalized_name = ?, note = ?, updated_at = ? WHERE id = ?")
       .run(name, normalizeName(name), note, now.toISOString(), id);
+    this.onChange(householdId);
     return this.get(householdId, id)!;
   }
 
@@ -90,6 +96,7 @@ export class ShoppingRepo {
     this.db
       .prepare("UPDATE shopping_items SET status = ?, updated_at = ?, bought_at = ? WHERE id = ?")
       .run(status, ts, status === "bought" ? ts : null, id);
+    this.onChange(householdId);
     return this.get(householdId, id)!;
   }
 
@@ -103,9 +110,11 @@ export class ShoppingRepo {
   }
 
   clearActive(householdId: string, now: Date): number {
-    return this.db
+    const changes = this.db
       .prepare("UPDATE shopping_items SET status = 'deleted', updated_at = ? WHERE household_id = ? AND status = 'active'")
       .run(now.toISOString(), householdId).changes;
+    if (changes > 0) this.onChange(householdId);
+    return changes;
   }
 
   /** 期限を過ぎた「最近買ったもの」と、削除済みのものを消す */

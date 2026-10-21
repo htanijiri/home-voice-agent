@@ -235,3 +235,49 @@ describe("API", () => {
     expect((await s.call("GET", "/shopping")).status).toBe(401);
   });
 });
+
+describe("変更の通知（008）", () => {
+  /** SSE を読み、条件に合う文字列が届くまで待つ */
+  async function readUntil(body: ReadableStream<Uint8Array>, pred: (text: string) => boolean): Promise<string> {
+    const reader = body.getReader();
+    const dec = new TextDecoder();
+    let text = "";
+    while (!pred(text)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += dec.decode(value, { stream: true });
+    }
+    reader.releaseLock();
+    return text;
+  }
+
+  it("ログインしていないと 401", async () => {
+    const t = await setup();
+    expect((await fetch(`${t.base}/api/events`)).status).toBe(401);
+  });
+
+  it("声のツールと同じリポジトリで変えると、開いている画面に届く。切断したら購読を外す", async () => {
+    const t = await setup();
+    const s = await t.session();
+    const ac = new AbortController();
+    const r = await fetch(`${t.base}/api/events`, { headers: { cookie: s.cookie }, signal: ac.signal });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+    const body = r.body!;
+    expect(await readUntil(body, (x) => x.includes("retry:"))).toContain("retry: 3000");
+    expect(t.app.changes.size).toBe(1);
+
+    t.app.shopping.add("home", "牛乳", undefined, t.clock.now());
+    expect(await readUntil(body, (x) => x.includes("event: shopping"))).toContain("event: shopping");
+    t.app.reminders.create("home", "ゴミ出し", { kind: "once", date: "2026-10-30", time: "08:00" }, new Date("2026-10-29T23:00:00Z"), t.clock.now());
+    expect(await readUntil(body, (x) => x.includes("event: reminders"))).toContain("event: reminders");
+    // ほかの家庭の変更は届けない（届いていれば次の読みに混ざる）
+    t.app.shopping.add("other", "卵", undefined, t.clock.now());
+    t.app.shopping.add("home", "卵", undefined, t.clock.now());
+    expect(await readUntil(body, (x) => x.includes("event:"))).toBe("event: shopping\ndata: {}\n\n");
+
+    ac.abort();
+    for (let i = 0; i < 50 && t.app.changes.size > 0; i++) await new Promise((res) => setTimeout(res, 20));
+    expect(t.app.changes.size).toBe(0);
+  });
+});

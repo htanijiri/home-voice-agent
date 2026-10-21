@@ -28,6 +28,7 @@ import { DeviceHub } from "./hub.js";
 import { FirmwareStore } from "./firmware.js";
 import { type OidcConfig, WebAuth } from "../web/auth.js";
 import { registerWeb } from "../web/routes.js";
+import { ChangeFeed } from "./change-feed.js";
 import { JobRunner, type Job } from "./jobs.js";
 import { VolumePolicy } from "./volume-policy.js";
 
@@ -56,6 +57,8 @@ export interface App {
   kv: KvRepo;
   shopping: ShoppingRepo;
   reminders: RemindersRepo;
+  /** 買い物リスト・リマインダーの変更の通知 */
+  changes: ChangeFeed;
   scheduler: ReminderScheduler;
   jobs: JobRunner;
   volume: VolumePolicy;
@@ -81,9 +84,10 @@ export function createApp(deps: AppDeps): App {
   const turns = new TurnsRepo(db);
   const usage = new UsageRepo(db, tz);
   const kv = new KvRepo(db);
-  const shopping = new ShoppingRepo(db);
+  const changes = new ChangeFeed();
+  const shopping = new ShoppingRepo(db, (hh) => changes.notify(hh, "shopping"));
   const tools = deps.tools ?? new ToolRegistry();
-  const reminders = new RemindersRepo(db, tz);
+  const reminders = new RemindersRepo(db, tz, (hh) => changes.notify(hh, "reminders"));
   tools.register(volumeTool(), ...shoppingTools(shopping), ...reminderTools(reminders, tz));
   let scheduler: ReminderScheduler | undefined;
   const volume = new VolumePolicy(config.volume, tz, kv);
@@ -204,7 +208,7 @@ export function createApp(deps: AppDeps): App {
     ? new WebAuth(db, deps.oidc, () => `${config.server.publicBaseUrl}/auth/callback`)
     : undefined;
   if (webAuth) {
-    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage }, webAuth, config, clock));
+    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage, changes }, webAuth, config, clock));
     jobs.push({ name: "web-sessions", at: "04:00", run: (now) => webAuth.purge(now) });
   } else {
     http.get("/", async (_req, reply) =>
@@ -235,6 +239,7 @@ export function createApp(deps: AppDeps): App {
     kv,
     shopping,
     reminders,
+    changes,
     scheduler,
     jobs: jobRunner,
     volume,
