@@ -61,4 +61,4 @@ cd server && npm install && cp .env.example .env && cp config/config.example.tom
 Fly.io（東京リージョン）に置きます。手順は [docs/DEPLOY.md](docs/DEPLOY.md) を参照してください。
 
 ## ライセンス
-MIT（予定）。端末側は xiaozhi-esp32（MIT）を利用する。
+[MIT](LICENSE)。端末側は [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)（MIT）を、ビルドのときに取得して利用する（このリポジトリにはパッチだけを置く）。
