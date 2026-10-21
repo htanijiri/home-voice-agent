@@ -1,0 +1,13 @@
+diff --git a/scripts/build.py b/scripts/build.py
+index 3b2e56e..190b589 100755
+--- a/scripts/build.py
++++ b/scripts/build.py
+@@ -33,7 +33,7 @@ _WAKE_WORD_TARGETS = (
+     "esp32p4",
+     "esp32s31",
+ )
+-_WAKE_WORD_MODEL_PATTERN = re.compile(r"^wn9[sl]?_[a-z0-9_]+$")
++_WAKE_WORD_MODEL_PATTERN = re.compile(r"^wn(9[sl]?|10s?)_[a-z0-9_]+$")
+ _ESP_SR_KCONFIG = Path(
+     "managed_components/espressif__esp-sr/Kconfig.projbuild"
+ )

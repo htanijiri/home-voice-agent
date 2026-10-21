@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "server", "run", "web-preview"],
+      "port": 8090
+    }
+  ]
+}

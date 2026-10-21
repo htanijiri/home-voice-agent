@@ -1,0 +1,12 @@
+# 取得する xiaozhi-esp32 のバージョン（変えるときは TECH_NOTES と HARDWARE_CHECK に記録する）
+XIAOZHI_REPO=https://github.com/78/xiaozhi-esp32.git
+XIAOZHI_TAG=v2.5.2
+XIAOZHI_COMMIT=49b4380b3faa0ceadd28a3e78aaf0f311c46c57e
+# v2.5.2 の CI と同じ ESP-IDF
+ESP_IDF_VERSION=v6.1
+# アイリス（wn10_ja_airisu）は esp-sr 2.5.4 以降にしかない（2.5.4 は取り下げ）
+ESP_SR_VERSION=2.6.0
+BOARD=m5stack/atoms3r-echo-pyramid
+LANGUAGE=ja-JP
+# 自作ビルドの番号。パッチや設定を変えたら 1 増やす（版は 2.5.2.<番号> になり、Wi-Fi 経由の更新で新しい版と判断される）
+HVA_BUILD=2

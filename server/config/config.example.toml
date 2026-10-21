@@ -1,0 +1,80 @@
+# server/config/config.toml の例。コピーして使う（config.toml は gitignore 済み）。秘密情報は .env に書く。
+
+[server]
+# HTTP（OTA・確認画面・通知の音声）と WebSocket の待ち受け
+httpPort = 8080
+# 端末やブラウザから見たこのサーバーの URL（OTA の応答と通知の音声の URL に使う）
+publicBaseUrl = "http://192.168.0.10:8080"
+# 端末に使わせる通信方式："websocket" または "mqtt"（004 以降は mqtt）
+deviceTransport = "websocket"
+# データ（SQLite）の置き場所
+dataDir = "./data"
+
+[mqtt]
+# 端末から見た MQTT の接続先（host:port）。開発中は TLS なし
+publicEndpoint = "192.168.0.10:1883"
+port = 1883
+# 端末から見た UDP の接続先
+udpPublicHost = "192.168.0.10"
+udpPort = 8884
+
+[llm]
+model = "claude-haiku-5-5"
+maxTokens = 400
+# 返事の速さを優先して低めにする（low / medium / high）
+effort = "low"
+
+[stt]
+# Google Speech-to-Text v2。2026-10 時点で、ja-JP の chirp_3 のストリーミングは us で使える
+# （global には chirp_3 がなく、asia-northeast1 は権限エラー。global の short は話し終わりの合図が来ず遅い）
+location = "us"
+model = "chirp_3"
+languageCode = "ja-JP"
+
+[tts]
+# Google Text-to-Speech の声（ja-JP の Chirp 3 HD の声から選ぶ）
+voice = "ja-JP-Chirp3-HD-Aoede"
+languageCode = "ja-JP"
+speakingRate = 1.05
+
+[conversation]
+followUpSeconds = 8
+speechStartTimeoutSeconds = 6
+maxUtteranceSeconds = 15
+contextKeepMinutes = 5
+maxHistoryTurns = 10
+firstSentenceTimeoutSeconds = 15
+totalTimeoutSeconds = 60
+
+[limits]
+# 1日（日本時間）の会話の回数の上限
+dailyTurns = 200
+
+[volume]
+day = 65
+night = 50
+nightStart = "22:00"
+nightEnd = "07:00"
+
+[retention]
+conversationDays = 30
+
+[household]
+id = "home"
+timezone = "Asia/Tokyo"
+
+[pricing]
+# 費用の目安の単価（米ドル）。確認日：2026-10-20。出典：各社の公式の料金ページ（一部は解説記事で補足）
+#   Anthropic: Claude Haiku 5.5（10 万トークン以下のプロンプト）
+#   Google: Speech-to-Text v2 のリアルタイム認識（標準）、Text-to-Speech の Chirp 3 HD
+#   Fly.io: shared-cpu-1x 512MB、固定 IPv4、ボリューム 1GB（東京は割増があり得るので、請求で確かめる）
+llmInputPerMTok = 0.10
+llmOutputPerMTok = 0.50
+llmCacheReadPerMTok = 0.01
+llmCacheWritePerMTok = 0.125
+sttPerMinute = 0.016
+sttFreeMinutesPerMonth = 60
+ttsPerMChars = 30
+ttsFreeCharsPerMonth = 1000000
+flyMonthly = 5.34
+usdJpy = 150

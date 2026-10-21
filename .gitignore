@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+
+# 計画書（チャットで相談した内容。個人情報・社内情報を含む可能性があるため Git 管理しない）
+brief/*
+!brief/README.md
+
+# 作業ジャーナル（指示原文・作業記録。社内情報や人名が混ざる可能性があるため Git 管理しない）
+journal/
+
+# Claude Code の個人設定と、別タスク用のワークツリー
+.claude/settings.local.json
+.claude/worktrees/
+
+# 秘密情報（共有用は *.example を使う）
+.env
+.env.*
+!.env.example
+.dev.vars
+config.js
+config.toml
+
+# ビルド・デプロイ用の出力
+dist/
+.wrangler/
+
+# 依存パッケージ・実行環境
+node_modules/
+.venv/
+__pycache__/
+*.py[oc]
+
+# ログ
+logs/
+*.log
+
+# ファームウェアのビルド（取得したソースと成果物）と、端末ごとの設定
+firmware/.build/
+firmware/config.env
+
+# サーバーのデータ（SQLite）と設定
+server/data/
+server/config/config.toml
+
+# Fly.io の実際の設定（アプリ名・URL・IP アドレス。公開しない）
+server/fly.local.toml

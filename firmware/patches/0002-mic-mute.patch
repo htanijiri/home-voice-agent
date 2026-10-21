@@ -1,0 +1,149 @@
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..449a152 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -58,8 +58,14 @@ Application::~Application() {
+ 
+ bool Application::SetDeviceState(DeviceState state) { return state_machine_.TransitionTo(state); }
+ 
++static const char* const MIC_MUTED_STATUS = "マイクオフ";
++
+ void Application::Initialize() {
+     auto& board = Board::GetInstance();
++    {
++        Settings settings("app", false);
++        mic_muted_ = settings.GetBool("mic_muted", false);
++    }
+     SetDeviceState(kDeviceStateStarting);
+ 
+     // Setup the display
+@@ -773,6 +779,28 @@ void Application::DismissAlert() {
+ 
+ void Application::ToggleChatState() { xEventGroupSetBits(event_group_, MAIN_EVENT_TOGGLE_CHAT); }
+ 
++void Application::ToggleMicMute() {
++    Schedule([this]() {
++        mic_muted_ = !mic_muted_;
++        {
++            Settings settings("app", true);
++            settings.SetBool("mic_muted", mic_muted_);
++        }
++        ESP_LOGI(TAG, "Mic muted: %d", mic_muted_);
++        if (mic_muted_ && protocol_ && protocol_->IsAudioChannelOpened()) {
++            protocol_->CloseAudioChannel();
++        }
++        if (GetDeviceState() == kDeviceStateIdle) {
++            audio_service_.EnableWakeWordDetection(!mic_muted_);
++            Board::GetInstance().GetDisplay()->SetStatus(mic_muted_ ? MIC_MUTED_STATUS : Lang::Strings::STANDBY);
++        }
++        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
++        if (auto led = Board::GetInstance().GetLed()) {
++            led->OnStateChanged();
++        }
++    });
++}
++
+ void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING); }
+ 
+ void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
+@@ -780,6 +808,12 @@ void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_
+ void Application::HandleToggleChatEvent() {
+     auto state = GetDeviceState();
+ 
++    // マイクオフの間は、ボタンで会話を始めない
++    if (mic_muted_ && state == kDeviceStateIdle) {
++        Board::GetInstance().GetDisplay()->SetStatus(MIC_MUTED_STATUS);
++        return;
++    }
++
+     if (state == kDeviceStateNotifying) {
+         StopNotification();
+         state = kDeviceStateIdle;
+@@ -899,6 +933,10 @@ void Application::HandleWakeWordDetectedEvent() {
+         return;
+     }
+ 
++    if (mic_muted_) {
++        return;
++    }
++
+     auto state = GetDeviceState();
+     auto wake_word = audio_service_.GetLastWakeWord();
+     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
+@@ -1017,7 +1055,10 @@ void Application::HandleStateChangedEvent() {
+                     "neutral");  // Then set emotion (wechat mode checks child count)
+             }
+             audio_service_.EnableVoiceProcessing(false);
+-            audio_service_.EnableWakeWordDetection(true);
++            audio_service_.EnableWakeWordDetection(!mic_muted_);
++            if (mic_muted_ && last_error_message_.empty()) {
++                display->SetStatus(MIC_MUTED_STATUS);
++            }
+             break;
+         case kDeviceStateConnecting:
+             display->SetStatus(Lang::Strings::CONNECTING);
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..9a797d9 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -96,6 +96,13 @@ public:
+      */
+     void ToggleChatState();
+ 
++    /**
++     * マイクオフの切り替え（home-voice-agent の追加）。
++     * オフの間はウェイクワードを検出せず、ボタンを押しても会話を始めない。状態は NVS に保存する。
++     */
++    void ToggleMicMute();
++    bool IsMicMuted() const { return mic_muted_; }
++
+     /**
+      * Start listening (event-based, thread-safe)
+      * Sends MAIN_EVENT_START_LISTENING to be handled in Run()
+@@ -173,6 +180,8 @@ private:
+     void StopNotification();
+     void HandleNotificationFinished(uint32_t playback_id, bool success);
+ 
++    bool mic_muted_ = false;
++
+     // Activation task (runs in background)
+     void ActivationTask();
+ 
+diff --git a/main/boards/m5stack/atoms3r-echo-pyramid/atoms3r_echo_pyramid.cc b/main/boards/m5stack/atoms3r-echo-pyramid/atoms3r_echo_pyramid.cc
+index efc4935..c067bbd 100644
+--- a/main/boards/m5stack/atoms3r-echo-pyramid/atoms3r_echo_pyramid.cc
++++ b/main/boards/m5stack/atoms3r-echo-pyramid/atoms3r_echo_pyramid.cc
+@@ -212,13 +212,18 @@ public:
+         }
+ 
+         auto& app = Application::GetInstance();
++        // マイクオフは赤。話し中は水色（赤はマイクオフに使う）
++        if (app.IsMicMuted()) {
++            ctrl_->SetStatusColor(64, 0, 0);   // red
++            return;
++        }
+         switch (app.GetDeviceState()) {
+             case kDeviceStateListening:
+                 ctrl_->SetStatusColor(0, 64, 0);   // green
+                 break;
+             case kDeviceStateSpeaking:
+             case kDeviceStateNotifying:
+-                ctrl_->SetStatusColor(64, 0, 0);   // red
++                ctrl_->SetStatusColor(0, 40, 64);  // cyan
+                 break;
+             default:
+                 ctrl_->SetStatusColor(0, 0, 64);   // blue
+@@ -849,10 +854,12 @@ private:
+             }
+             app.ToggleChatState();
+         });
++        // 2秒の長押しでマイクオフの切り替え
++        boot_button_.OnLongPress([]() { Application::GetInstance().ToggleMicMute(); });
+     }
+ 
+ public:
+-    AtomS3rEchoPyramidBoard() : boot_button_(BOOT_BUTTON_GPIO) {
++    AtomS3rEchoPyramidBoard() : boot_button_(BOOT_BUTTON_GPIO, false, 2000) {
+         InitializeI2c();
+         WaitForPyramidConnection();
+         CheckPyramidConnection();
