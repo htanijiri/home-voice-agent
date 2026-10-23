@@ -30,8 +30,18 @@ export interface TtsResult {
   characters: number;
 }
 
+/** ストリーミングの合成。PCM の塊が、できたところから順に届く */
+export interface TtsStream {
+  sampleRate: number;
+  characters: number;
+  /** 失敗したら、for await の中で投げる */
+  chunks: AsyncIterable<Int16Array>;
+}
+
 export interface TextToSpeech {
   synthesize(text: string, opts?: { signal?: AbortSignal }): Promise<TtsResult>;
+  /** ストリーミングの合成（012）。呼んだ時点で合成を始め、届いた塊はためておく。ない実装はまとめての合成を使う */
+  stream?(text: string, opts?: { signal?: AbortSignal }): TtsStream;
   /** 通知用。Ogg Opus のファイルを返す */
   synthesizeOggOpus(text: string): Promise<{ ogg: Buffer; characters: number }>;
 }

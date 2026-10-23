@@ -6,6 +6,7 @@ import { buildReport, stats } from "../src/report/report.js";
 import { testConfig } from "./helpers.js";
 
 const noListen = {
+  ms_voice_end_to_audio: null,
   listen_audio_ms: null,
   listen_ms_to_first_audio: null,
   listen_max_gap_ms: null,
@@ -97,9 +98,9 @@ describe("集計", () => {
     const repo = new TurnsRepo(openDb(":memory:"));
     const listen = { audioMs: 6000, msToFirstAudio: 150, maxGapMs: 90, noiseRms: 12, speechRms: 40, msToSpeechStart: null, msToLocalSpeechStart: 900, finals: 0, emptyFinal: true, noSpeechReason: "timeout" as const };
     repo.insert({ deviceId: "d", userText: "", assistantText: "x", outcome: "no_speech", timings: {}, listen }, new Date());
-    repo.insert({ deviceId: "d", userText: "", assistantText: "x", outcome: "ok", timings: {} }, new Date());
+    repo.insert({ deviceId: "d", userText: "", assistantText: "x", outcome: "ok", timings: { voiceEndAt: 1000, speechEndAt: 1800, firstAudioAt: 3000 } }, new Date());
     const [plain, rec] = repo.list();
     expect(rec).toMatchObject({ listen_audio_ms: 6000, listen_ms_to_first_audio: 150, listen_max_gap_ms: 90, listen_noise_rms: 12, listen_speech_rms: 40, listen_ms_to_speech_start: null, listen_ms_to_local_speech_start: 900, listen_finals: 0, listen_empty_final: 1, no_speech_reason: "timeout" });
-    expect(plain).toMatchObject({ listen_audio_ms: null, no_speech_reason: null });
+    expect(plain).toMatchObject({ listen_audio_ms: null, no_speech_reason: null, ms_voice_end_to_audio: 2000, ms_total: 1200 });
   });
 });

@@ -17,6 +17,26 @@ export interface ToolContext {
 export interface Tool {
   def: ToolDefinition;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
+  /**
+   * 入力に reply（うまくいったら言う言葉）を受け付ける操作のツール（012）。
+   * 結果が思ったとおりなら、2回目の LLM の呼び出しをせずに reply を読み上げる。
+   * 思ったとおりでない結果（既にあった、など）は、run の戻り値に expected: false を入れて知らせる
+   */
+  reply?: boolean;
+}
+
+/** reply の説明。操作のツールの入力に足す */
+export const REPLY_PROP = {
+  type: "string",
+  description:
+    "操作がうまくいったときに、そのまま読み上げる返事（1〜2文の短い話し言葉）。例：「牛乳を買い物リストに追加しました。」。件数や残りの品目、既にあったかどうかなど、結果を見ないと分からないことは書かない。思ったとおりにいかなかったときは使われず、結果を見て改めて返事を作る。",
+};
+
+export interface ToolRunResult {
+  content: string;
+  isError: boolean;
+  /** うまくいき、結果が思ったとおりだった（reply をそのまま使ってよい） */
+  expected: boolean;
 }
 
 export class ToolInputError extends Error {}
@@ -31,21 +51,41 @@ export class ToolRegistry {
 
   /** 名前順に並べて返す（プロンプトのキャッシュが効くよう順序を固定する） */
   definitions(): ToolDefinition[] {
-    return [...this.tools.values()].map((t) => t.def).sort((a, b) => a.name.localeCompare(b.name));
+    return [...this.tools.values()]
+      .map((t) => (t.reply ? withReply(t.def) : t.def))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async run(name: string, input: unknown, ctx: ToolContext): Promise<{ content: string; isError: boolean }> {
+  /** reply を受け付けるツールか */
+  acceptsReply(name: string): boolean {
+    return this.tools.get(name)?.reply === true;
+  }
+
+  async run(name: string, input: unknown, ctx: ToolContext): Promise<ToolRunResult> {
     const tool = this.tools.get(name);
-    if (!tool) return { content: JSON.stringify({ error: `unknown tool: ${name}` }), isError: true };
+    if (!tool) return { content: JSON.stringify({ error: `unknown tool: ${name}` }), isError: true, expected: false };
     try {
       const obj = validateInput(tool.def.inputSchema, input);
-      const result = await tool.run(obj, ctx);
-      return { content: JSON.stringify(result ?? { ok: true }), isError: false };
+      const { reply: _reply, ...args } = obj;
+      const result = await tool.run(tool.reply ? args : obj, ctx);
+      let expected = true;
+      let body: unknown = result ?? { ok: true };
+      if (body && typeof body === "object" && "expected" in body) {
+        const { expected: e, ...rest } = body as Record<string, unknown>;
+        expected = e !== false;
+        body = rest;
+      }
+      return { content: JSON.stringify(body), isError: false, expected };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { content: JSON.stringify({ error: message }), isError: true };
+      return { content: JSON.stringify({ error: message }), isError: true, expected: false };
     }
   }
+}
+
+function withReply(def: ToolDefinition): ToolDefinition {
+  const schema = def.inputSchema as { properties?: Record<string, unknown> };
+  return { ...def, inputSchema: { ...def.inputSchema, properties: { ...schema.properties, reply: REPLY_PROP } } };
 }
 
 function validateInput(schema: Record<string, unknown>, input: unknown): Record<string, unknown> {

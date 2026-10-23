@@ -56,7 +56,7 @@ localVadRatio = 3
 localVadMinRms = 50
 # 声がこの長さ（ミリ秒）続いたら話し始め。話し始めのあと、静かな状態がこの長さ続いたら話し終わり
 localVadStartMs = 300
-localVadEndMs = 1200
+localVadEndMs = 800
 
 [limits]
 # 1日（日本時間）の会話の回数の上限

@@ -69,4 +69,36 @@ describe("XiaozhiSink の読み上げの始まり", () => {
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(sent.filter((m) => m.audio)).toHaveLength(0);
   });
+
+  it("塊で届いた音声を、60ms に満たない端数をつないで送る（012）", async () => {
+    const { link, sent } = fakeLink();
+    const sink = new XiaozhiSink(link, { startDelayMs: 0, leadingSilenceMs: 0 });
+    async function* chunks() {
+      for (const n of [1000, 1000, 1000, 600]) yield new Int16Array(n);
+    }
+    sink.ttsStart();
+    await sink.audio(chunks(), 24000, new AbortController().signal);
+    sink.close();
+    // 3600 標本 = 1440 × 2 + 720 → 3 フレーム（最後は無音で埋める）
+    expect(sent.filter((m) => m.audio)).toHaveLength(3);
+  });
+
+  it("合成が遅れて届いても、遅れた分を早送りしない（012）", async () => {
+    const { link, sent } = fakeLink();
+    const sink = new XiaozhiSink(link, { startDelayMs: 0, leadingSilenceMs: 0 });
+    async function* chunks() {
+      yield new Int16Array(1440 * 6);
+      await new Promise((r) => setTimeout(r, 600));
+      yield new Int16Array(1440 * 3);
+    }
+    sink.ttsStart();
+    const t0 = Date.now();
+    await sink.audio(chunks(), 24000, new AbortController().signal);
+    sink.close();
+    const audio = sent.filter((m) => m.audio);
+    expect(audio).toHaveLength(9);
+    // 遅れて届いた3フレームは、届いた時点から再生の速さで送る（まとめて一度に送らない）
+    expect(audio[8]!.at - audio[6]!.at).toBeGreaterThanOrEqual(100);
+    expect(audio[6]!.at - t0).toBeGreaterThanOrEqual(590);
+  });
 });

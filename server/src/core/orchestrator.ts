@@ -141,13 +141,34 @@ export class Orchestrator {
         if (stopReason !== "tool_use" || toolUses.length === 0) break;
 
         // すべてのツールの結果を1つのメッセージで返す
-        const results = await Promise.all(
-          toolUses.map(async (u) => {
-            const r = await this.tools.run(u.name, u.input, { ...input.ctx, now });
-            return { type: "tool_result" as const, toolUseId: u.id, content: r.content, isError: r.isError };
-          }),
-        );
+        const runs = await Promise.all(toolUses.map((u) => this.tools.run(u.name, u.input, { ...input.ctx, now })));
+        const results = runs.map((r, i) => ({
+          type: "tool_result" as const,
+          toolUseId: toolUses[i]!.id,
+          content: r.content,
+          isError: r.isError,
+        }));
         working.push({ role: "user", content: results });
+
+        // 操作がすべて思ったとおりにいったら、先に決めてあった返事（reply）を読み上げ、2回目の問い合わせをしない（012）
+        const replies = toolUses.map((u) => {
+          const r = (u.input as { reply?: unknown } | undefined)?.reply;
+          return this.tools.acceptsReply(u.name) && typeof r === "string" ? r.trim() : "";
+        });
+        if (replies.every(Boolean) && runs.every((r) => !r.isError && r.expected)) {
+          const replySplitter = new SentenceSplitter();
+          const spoken: string[] = [];
+          for (const s of [...replySplitter.push(replies.join("")), ...replySplitter.flush()]) {
+            if (!isSpeakable(s)) continue;
+            clearFirst();
+            spoken.push(s);
+            yield s;
+          }
+          if (spoken.length > 0) {
+            working.push({ role: "assistant", content: [{ type: "text", text: spoken.join("") }] });
+            break;
+          }
+        }
       }
       // 成功したときだけ履歴を確定する。外部サービスの元のブロック（thinking など）は履歴に残さない
       input.history.splice(

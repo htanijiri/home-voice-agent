@@ -18,6 +18,7 @@ export function volumeToLevel(volume: number): number {
 
 export function volumeTool(): Tool {
   return {
+    reply: true,
     def: {
       name: "set_volume",
       description:

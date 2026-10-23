@@ -29,6 +29,7 @@ export const STAGES = [
   ["ms_stt_to_first_sentence", "認識結果→返事の最初の文"],
   ["ms_first_sentence_to_audio", "最初の文→読み上げ開始"],
   ["ms_total", "話し終わり→読み上げ開始（合計）"],
+  ["ms_voice_end_to_audio", "本当の話し終わり→読み上げ開始（012）"],
 ] as const;
 
 export function buildReport(opts: {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/core/orchestrator.js";
 import { ToolRegistry } from "../src/core/tools/registry.js";
 import { MESSAGES, type TurnRecord, VoiceSession, type VoiceSessionConfig } from "../src/core/voice-session.js";
-import { FakeClock, FakeLlm, FakeStt, FakeTts, RecordingSink, said } from "./fakes.js";
+import { FakeClock, FakeLlm, FakeStreamingTts, FakeStt, FakeTts, RecordingSink, said } from "./fakes.js";
 
 const baseCfg: VoiceSessionConfig = {
   followUpSeconds: 8,
@@ -13,9 +13,9 @@ const baseCfg: VoiceSessionConfig = {
 };
 const frame = new Int16Array(960);
 
-function setup(opts: { llm: FakeLlm; stt: FakeStt; cfg?: Partial<VoiceSessionConfig>; limit?: string }) {
+function setup(opts: { llm: FakeLlm; stt: FakeStt; cfg?: Partial<VoiceSessionConfig>; limit?: string; tts?: FakeTts }) {
   const clock = new FakeClock();
-  const tts = new FakeTts();
+  const tts = opts.tts ?? new FakeTts();
   const sink = new RecordingSink();
   const turns: TurnRecord[] = [];
   const orchestrator = new Orchestrator(opts.llm, new ToolRegistry(), "sys", () => "", clock, {
@@ -185,6 +185,11 @@ describe("VoiceSession", () => {
       expect(stt.streams[0]!.ended).toBe(true);
       expect(tts.texts).toEqual(["追加しました。"]);
       expect(turns[0]!.listen).toMatchObject({ msToLocalSpeechStart: 4200 + 240, msToSpeechStart: null });
+      // 本当の話し終わりは、最後に声だったときで、STT を閉じた時刻（0.8 秒後）より前（012）
+      const t = turns[0]!.timings;
+      expect(t.voiceEndAt).toBeDefined();
+      expect(t.speechEndAt! - t.voiceEndAt!).toBeGreaterThanOrEqual(700);
+      expect(t.firstAudioAt! >= t.voiceEndAt!).toBe(true);
     });
 
     it("待ち時間が切れる瞬間に話し始めていたら、話し始めと判断できるまで待つ（文の頭で切らない）", async () => {
@@ -224,6 +229,32 @@ describe("VoiceSession", () => {
       expect(tts.texts).toEqual(["こんにちは。"]);
       expect(sink.events.at(-1)).toBe("end");
       expect(stt.streams[1]!.aborted).toBe(true);
+    });
+  });
+
+  describe("音声合成のストリーミング（012）", () => {
+    it("ストリーミングの合成があれば使い、塊をすべて端末に送る", async () => {
+      const tts = new FakeStreamingTts();
+      const stt = new FakeStt([said("こんにちは"), "silent"]);
+      const { session, sink } = setup({ llm: new FakeLlm([{ text: "こんにちは。元気です。" }]), stt, tts, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(60);
+      expect(tts.streamed).toEqual(["こんにちは。", "元気です。"]);
+      expect(tts.texts).toEqual([]);
+      expect(sink.samples).toEqual([2500, 2500]);
+    });
+
+    it("最初の塊の前に失敗したら、まとめての合成でやり直す", async () => {
+      const tts = new FakeStreamingTts();
+      tts.streamFailWith = new Error("stream down");
+      const stt = new FakeStt([said("こんにちは"), "silent"]);
+      const { session, sink } = setup({ llm: new FakeLlm([{ text: "こんにちは。" }]), stt, tts, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(60);
+      expect(tts.texts).toEqual(["こんにちは。"]);
+      expect(sink.samples).toEqual([240]);
     });
   });
 

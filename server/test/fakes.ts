@@ -135,6 +135,31 @@ export class FakeTts implements TextToSpeech {
   }
 }
 
+/** ストリーミングの合成を持つ偽の TTS（012）。1文を、決めた長さの塊に分けて返す */
+export class FakeStreamingTts extends FakeTts {
+  streamed: string[] = [];
+  /** 塊の長さ（24kHz の標本数）の並び */
+  chunkSizes = [1000, 1000, 500];
+  /** ストリーミングを、最初の塊の前に失敗させる */
+  streamFailWith?: Error;
+  stream(text: string) {
+    this.streamed.push(text);
+    const sizes = this.chunkSizes;
+    const fail = this.streamFailWith;
+    return {
+      sampleRate: 24000,
+      characters: text.length,
+      chunks: (async function* () {
+        if (fail) throw fail;
+        for (const n of sizes) {
+          await Promise.resolve();
+          yield new Int16Array(n);
+        }
+      })(),
+    };
+  }
+}
+
 export class RecordingSink implements DeviceSink {
   events: string[] = [];
   stt(text: string) {
@@ -149,8 +174,14 @@ export class RecordingSink implements DeviceSink {
   sentence(text: string) {
     this.events.push(`sentence:${text}`);
   }
-  async audio() {
+  /** 送られた音声の標本数（塊の列は読み切って数える） */
+  samples: number[] = [];
+  async audio(pcm: Int16Array | AsyncIterable<Int16Array>) {
     this.events.push("audio");
+    let n = 0;
+    if (pcm instanceof Int16Array) n = pcm.length;
+    else for await (const c of pcm) n += c.length;
+    this.samples.push(n);
   }
   ttsStop() {
     this.events.push("tts:stop");

@@ -1,6 +1,6 @@
 // 端末との1本の接続（WebSocket、または MQTT＋UDP）を表す。通信方式の違いはここで吸収する。
 import type { DeviceSink } from "../../core/voice-session.js";
-import { DOWNLINK_RATE, OpusDecoder, OpusEncoder, resample, sendPaced } from "./opus.js";
+import { DOWNLINK_RATE, OpusDecoder, OpusEncoder, PacedSender, resample } from "./opus.js";
 
 export interface DeviceLink {
   readonly deviceId: string;
@@ -51,21 +51,33 @@ export class XiaozhiSink implements DeviceSink {
   sentence(text: string) {
     this.json({ type: "tts", state: "sentence_start", text });
   }
-  async audio(pcm: Int16Array, sampleRate: number, signal: AbortSignal) {
+  async audio(source: Int16Array | AsyncIterable<Int16Array>, sampleRate: number, signal: AbortSignal) {
     if (!this.link.audioOpen) return;
-    let samples = resample(pcm, sampleRate, DOWNLINK_RATE);
-    if (this.ttsStartedAt !== undefined) {
-      // 端末は tts start を受けてから「話し中」に切り替え、そのときに再生待ちの音声を捨てる（ResetDecoder）。
-      // 切り替わる前に届いた音声も捨てるため、すぐ送ると返事の先頭（1〜2文字）が欠ける。
-      // 切り替わるのを待ってから送り、スピーカーの立ち上がりの分の無音を先頭に足す
-      const startedAt = this.ttsStartedAt;
-      this.ttsStartedAt = undefined;
-      await sleep(startedAt + this.timing.startDelayMs - Date.now(), signal);
+    const pacer = new PacedSender((f) => this.link.sendAudio(f), signal);
+    const frame = this.encoder.frameSamples;
+    let carry = new Int16Array(0);
+    for await (const chunk of typeof (source as AsyncIterable<Int16Array>)[Symbol.asyncIterator] === "function" ? (source as AsyncIterable<Int16Array>) : [source as Int16Array]) {
       if (signal.aborted) return;
-      samples = withLeadingSilence(samples, (DOWNLINK_RATE * this.timing.leadingSilenceMs) / 1000);
+      let samples = resample(chunk, sampleRate, DOWNLINK_RATE);
+      if (this.ttsStartedAt !== undefined) {
+        // 端末は tts start を受けてから「話し中」に切り替え、そのときに再生待ちの音声を捨てる（ResetDecoder）。
+        // 切り替わる前に届いた音声も捨てるため、すぐ送ると返事の先頭（1〜2文字）が欠ける。
+        // 切り替わるのを待ってから送り、スピーカーの立ち上がりの分の無音を先頭に足す
+        const startedAt = this.ttsStartedAt;
+        this.ttsStartedAt = undefined;
+        await sleep(startedAt + this.timing.startDelayMs - Date.now(), signal);
+        if (signal.aborted) return;
+        samples = withLeadingSilence(samples, (DOWNLINK_RATE * this.timing.leadingSilenceMs) / 1000);
+      }
+      // 60ms に満たない端数は、次の塊とつなぐ
+      const all = concat(carry, samples);
+      const whole = all.length - (all.length % frame);
+      carry = all.slice(whole);
+      await pacer.push(this.encoder.encodeAll(all.subarray(0, whole)));
     }
-    const frames = this.encoder.encodeAll(samples);
-    await sendPaced(frames, (f) => this.link.sendAudio(f), signal);
+    if (signal.aborted) return;
+    if (carry.length) await pacer.push(this.encoder.encodeAll(carry));
+    await pacer.finish();
   }
   ttsStop() {
     this.json({ type: "tts", state: "stop" });
@@ -76,6 +88,14 @@ export class XiaozhiSink implements DeviceSink {
   close() {
     this.encoder.close();
   }
+}
+
+function concat(a: Int16Array, b: Int16Array): Int16Array {
+  if (a.length === 0) return b;
+  const out = new Int16Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
 }
 
 function withLeadingSilence(pcm: Int16Array, samples: number): Int16Array {

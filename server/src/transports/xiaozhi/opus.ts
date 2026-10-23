@@ -59,26 +59,61 @@ export function resample(pcm: Int16Array, from: number, to: number): Int16Array 
   return out;
 }
 
-/** Opus のフレームを、再生の速さに合わせて送る。最初の数フレームはまとめて送り、端末側の再生を途切れさせない */
+/**
+ * Opus のフレームを、再生の速さに合わせて送る。最初の数フレームはまとめて送り、端末側の再生を途切れさせない。
+ * フレームは何回かに分けて渡してよい（ストリーミングの合成で、できたところから送るため）。
+ */
+export class PacedSender {
+  private start?: number;
+  private sent = 0;
+  private readonly pre: number;
+  private readonly frameMs: number;
+
+  constructor(
+    private readonly send: (frame: Buffer) => void,
+    private readonly signal: AbortSignal,
+    opts: { preBuffer?: number; frameMs?: number } = {},
+  ) {
+    this.pre = opts.preBuffer ?? 4;
+    this.frameMs = opts.frameMs ?? FRAME_MS;
+  }
+
+  async push(frames: Buffer[]): Promise<void> {
+    for (const f of frames) {
+      if (this.signal.aborted) return;
+      const now = Date.now();
+      this.start ??= now;
+      let due = this.start + Math.max(0, this.sent - this.pre) * this.frameMs;
+      // 合成が再生に追いつかず遅れたら、そこから数え直す（遅れた分を早送りしない。最後の待ちの計算も合う）
+      if (due < now - this.frameMs) {
+        this.start = now - Math.max(0, this.sent - this.pre) * this.frameMs;
+        due = now;
+      }
+      const wait = due - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (this.signal.aborted) return;
+      this.send(f);
+      this.sent++;
+    }
+  }
+
+  /** 最後に送った分が再生され終わるまで待つ */
+  async finish(): Promise<void> {
+    if (this.start === undefined || this.signal.aborted) return;
+    // UDP の音声が MQTT の「読み上げ終了」より後に着くと端末に捨てられるため、送り終えてから最低 100ms は空ける
+    const tail = Math.max(100, this.start + this.sent * this.frameMs - Date.now() - this.pre * this.frameMs);
+    await new Promise((r) => setTimeout(r, tail));
+  }
+}
+
+/** Opus のフレームを、再生の速さに合わせて送る（まとめて渡す場合） */
 export async function sendPaced(
   frames: Buffer[],
   send: (frame: Buffer) => void,
   signal: AbortSignal,
   opts: { preBuffer?: number; frameMs?: number } = {},
 ): Promise<void> {
-  const pre = opts.preBuffer ?? 4;
-  const frameMs = opts.frameMs ?? FRAME_MS;
-  const start = Date.now();
-  for (let i = 0; i < frames.length; i++) {
-    if (signal.aborted) return;
-    const due = start + Math.max(0, i - pre) * frameMs;
-    const wait = due - Date.now();
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    if (signal.aborted) return;
-    send(frames[i]!);
-  }
-  // 最後に送った分が再生され終わるまで待つ。UDP の音声が MQTT の「読み上げ終了」より後に着くと
-  // 端末に捨てられるため、送り終えてから最低 100ms は空ける
-  const tail = Math.max(100, start + frames.length * frameMs - Date.now() - pre * frameMs);
-  if (!signal.aborted) await new Promise((r) => setTimeout(r, tail));
+  const p = new PacedSender(send, signal, opts);
+  await p.push(frames);
+  await p.finish();
 }

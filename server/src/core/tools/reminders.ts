@@ -135,6 +135,8 @@ export function reminderTools(repo: RemindersRepo, tz: string): Tool[] {
       },
     },
     {
+      // reply を使うのは消す操作だけ。登録・変更は、結果の日時で言い直して確かめるため使わない（012）
+      reply: true,
       def: {
         name: "reminder_delete",
         description:

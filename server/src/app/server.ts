@@ -10,7 +10,7 @@ import { makeTurnNote } from "../core/turn-note.js";
 import { ToolRegistry } from "../core/tools/registry.js";
 import type { Db } from "../db/db.js";
 import { DevicesRepo } from "../db/devices-repo.js";
-import { TurnsRepo } from "../db/turns-repo.js";
+import { TurnsRepo, voiceEndToAudio } from "../db/turns-repo.js";
 import { UsageRepo } from "../db/usage-repo.js";
 import { errorFields, log } from "../log.js";
 import { registerOta } from "../transports/xiaozhi/ota.js";
@@ -154,6 +154,7 @@ export function createApp(deps: AppDeps): App {
           outcome: rec.outcome,
           errorKind: rec.errorKind,
           msTotal: rec.timings.firstAudioAt && rec.timings.speechEndAt ? rec.timings.firstAudioAt - rec.timings.speechEndAt : undefined,
+          msVoiceEndToAudio: voiceEndToAudio(rec.timings) ?? undefined,
         });
       },
       pendingNotes: () => scheduler?.pendingNotes(),

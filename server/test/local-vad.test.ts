@@ -15,12 +15,14 @@ const feed = (vad: LocalVad, rms: number, frames: number) => {
 };
 
 describe("LocalVad", () => {
-  it("まわりの音の 3 倍以上の声が 300ms 続いたら話し始め、1.2 秒静かになったら話し終わり", () => {
+  it("まわりの音の 3 倍以上の声が 300ms 続いたら話し始め、0.8 秒静かになったら話し終わり", () => {
     const vad = new LocalVad();
     expect(feed(vad, 20, 30)).toEqual([]);
     // 遠くの声（009 の記録：雑音 18〜20 に対して 82〜104）
     expect(feed(vad, 90, 10)).toEqual([{ at: 4, ev: "start" }]);
-    expect(feed(vad, 25, 19)).toEqual([]);
+    expect(vad.voicedNow).toBe(true);
+    expect(feed(vad, 25, 13)).toEqual([]);
+    expect(vad.voicedNow).toBe(false);
     expect(feed(vad, 25, 1)).toEqual([{ at: 0, ev: "end" }]);
     expect(feed(vad, 90, 10)).toEqual([]);
   });

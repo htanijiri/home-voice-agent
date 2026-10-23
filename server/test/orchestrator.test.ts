@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ConversationError, Orchestrator, trimHistory } from "../src/core/orchestrator.js";
 import { SentenceSplitter } from "../src/core/sentence.js";
-import { ToolRegistry } from "../src/core/tools/registry.js";
+import { type Tool, ToolRegistry } from "../src/core/tools/registry.js";
 import type { ChatMessage } from "../src/core/types.js";
 import { FakeClock, FakeLlm } from "./fakes.js";
 
@@ -193,3 +193,78 @@ describe("外部サービスの元のブロック", () => {
     expect(history.every((m) => m.providerBlocks === undefined)).toBe(true);
   });
 });
+
+describe("操作の返事を先に決める（reply、012）", () => {
+  const add: Tool = {
+    reply: true,
+    def: { name: "add", description: "", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+    async run(input) {
+      return { added: [input.name], expected: input.name !== "卵" };
+    },
+  };
+  const fail: Tool = {
+    reply: true,
+    def: { name: "fail", description: "", inputSchema: { type: "object", properties: {} } },
+    async run() {
+      throw new Error("ありません");
+    },
+  };
+  const list: Tool = {
+    def: { name: "list", description: "", inputSchema: { type: "object", properties: {} } },
+    async run() {
+      return { items: [] };
+    },
+  };
+  const tools = () => new ToolRegistry().register(add, fail, list);
+
+  it("reply を受け付けるツールの定義にだけ reply を足し、ツールには渡さない", async () => {
+    const reg = tools();
+    const defs = Object.fromEntries(reg.definitions().map((d) => [d.name, d.inputSchema as { properties: Record<string, unknown> }]));
+    expect(defs.add!.properties.reply).toBeDefined();
+    expect(defs.list!.properties.reply).toBeUndefined();
+    const r = await reg.run("add", { name: "牛乳", reply: "追加しました。" }, ctx);
+    expect(r).toEqual({ content: '{"added":["牛乳"]}', isError: false, expected: true });
+  });
+
+  it("思ったとおりにいったら reply を読み上げ、2回目の問い合わせをしない。履歴は次の発話でも使える形", async () => {
+    const llm = new FakeLlm([{ toolUses: [{ name: "add", input: { name: "牛乳", reply: "牛乳を追加しました。" } }] }, { text: "次の返事です。" }]);
+    const o = new Orchestrator(llm, tools(), "sys", () => "", new FakeClock(), cfg);
+    const history: ChatMessage[] = [];
+    expect(await collect(o.respond({ history, userText: "牛乳を追加して", ctx }))).toEqual(["牛乳を追加しました。"]);
+    expect(llm.requests).toHaveLength(1);
+    expect(history.map((m) => `${m.role}:${m.content.map((b) => b.type).join(",")}`)).toEqual([
+      "user:text",
+      "assistant:tool_use",
+      "user:tool_result",
+      "assistant:text",
+    ]);
+    expect(history[3]!.content[0]).toMatchObject({ text: "牛乳を追加しました。" });
+    // 次の発話は、この履歴のあとに続く
+    expect(await collect(o.respond({ history, userText: "ありがとう", ctx }))).toEqual(["次の返事です。"]);
+    expect(llm.requests[1]!.messages).toHaveLength(5);
+  });
+
+  it("思ったとおりでない結果（既にあった）・エラー・reply のないツールが混ざるときは、結果を見て返事を作る", async () => {
+    for (const toolUses of [
+      [{ name: "add", input: { name: "卵", reply: "卵を追加しました。" } }],
+      [{ name: "fail", input: { reply: "消しました。" } }],
+      [{ name: "add", input: { name: "牛乳", reply: "追加しました。" } }, { name: "list", input: {} }],
+      [{ name: "add", input: { name: "牛乳" } }],
+    ]) {
+      const llm = new FakeLlm([{ toolUses }, { text: "結果を見た返事です。" }]);
+      const o = new Orchestrator(llm, tools(), "sys", () => "", new FakeClock(), cfg);
+      expect(await collect(o.respond({ history: [], userText: "x", ctx }))).toEqual(["結果を見た返事です。"]);
+      expect(llm.requests).toHaveLength(2);
+    }
+  });
+
+  it("2つの操作がどちらも思ったとおりなら、reply をつないで読み上げる", async () => {
+    const llm = new FakeLlm([
+      { toolUses: [{ name: "add", input: { name: "牛乳", reply: "牛乳を追加しました。" } }, { name: "add", input: { name: "パン", reply: "パンも追加しました。" } }] },
+    ]);
+    const o = new Orchestrator(llm, tools(), "sys", () => "", new FakeClock(), cfg);
+    expect(await collect(o.respond({ history: [], userText: "x", ctx }))).toEqual(["牛乳を追加しました。", "パンも追加しました。"]);
+    expect(llm.requests).toHaveLength(1);
+  });
+});
+

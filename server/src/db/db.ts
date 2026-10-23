@@ -120,6 +120,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE turns ADD COLUMN listen_ms_to_local_speech_start INTEGER;
   `,
+  // 8: 本当の話し終わりから、最初の音声を送り始めるまで（012）
+  `
+  ALTER TABLE turns ADD COLUMN ms_voice_end_to_audio INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {

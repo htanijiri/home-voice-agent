@@ -16,8 +16,8 @@ export interface DeviceSink {
   emotion(emotion: string): void;
   ttsStart(): void;
   sentence(text: string): void;
-  /** PCM を端末に送る。再生にかかる時間に合わせて送り終えたら resolve する */
-  audio(pcm: Int16Array, sampleRate: number, signal: AbortSignal): Promise<void>;
+  /** PCM（まとめて、または塊の列）を端末に送る。再生にかかる時間に合わせて送り終えたら resolve する */
+  audio(pcm: Int16Array | AsyncIterable<Int16Array>, sampleRate: number, signal: AbortSignal): Promise<void>;
   ttsStop(): void;
   /** 会話を終えて、端末を待機に戻す */
   endConversation(): void;
@@ -39,6 +39,8 @@ export interface VoiceSessionConfig {
 
 export interface TurnTimings {
   listenStartAt?: number;
+  /** 本当の話し終わり：サーバーの判定で最後に声だった時刻（012） */
+  voiceEndAt?: number;
   speechEndAt?: number;
   sttFinalAt?: number;
   firstSentenceAt?: number;
@@ -184,7 +186,9 @@ export class VoiceSession {
     };
     // 話し始めは、STT の合図とサーバーでの判定の早いほうで決める（STT の合図は 0.6〜1.4 秒遅れるため）
     this.onVad = (pcm) => {
-      for (const ev of vad.audio(pcm)) {
+      const events = vad.audio(pcm);
+      if (vad.voicedNow) this.timings.voiceEndAt = Date.now();
+      for (const ev of events) {
         if (ev === "start") {
           listen.localSpeechStart();
           startSpeech();
@@ -320,11 +324,10 @@ export class VoiceSession {
   ): Promise<void> {
     let started = false;
     let pending: Promise<void> = Promise.resolve();
-    const tts = this.deps.tts;
     for await (const s of sentences) {
       if (signal.aborted) break;
       if (!this.timings.firstSentenceAt) this.timings.firstSentenceAt = Date.now();
-      const synth = tts.synthesize(s, { signal });
+      const synth = this.openSpeech(s, signal);
       const prev = pending;
       pending = (async () => {
         const r = await synth;
@@ -339,7 +342,7 @@ export class VoiceSession {
         }
         this.sink.sentence(s);
         spoken.push(s);
-        await this.sink.audio(r.pcm, r.sampleRate, signal);
+        await this.sink.audio(r.audio, r.sampleRate, signal);
       })();
       // 合成の失敗は待ち合わせのところで投げる
       pending.catch(() => undefined);
@@ -350,6 +353,42 @@ export class VoiceSession {
       // 読み上げる文がなかった
       this.state = "SPEAKING";
     }
+  }
+
+  /**
+   * 1文の音声を用意する。ストリーミングの合成があれば、最初の塊が届いた時点で返す（残りは送りながら受け取る）。
+   * 最初の塊より前に失敗したら、まとめての合成でやり直す
+   */
+  private async openSpeech(
+    text: string,
+    signal: AbortSignal,
+  ): Promise<{ audio: Int16Array | AsyncIterable<Int16Array>; sampleRate: number; characters: number }> {
+    const tts = this.deps.tts;
+    if (tts.stream) {
+      try {
+        const st = tts.stream(text, { signal });
+        const it = st.chunks[Symbol.asyncIterator]();
+        const first = await it.next();
+        if (!first.done) {
+          const deviceId = this.deviceId;
+          const rest = (async function* () {
+            yield first.value;
+            try {
+              for (let r = await it.next(); !r.done; r = await it.next()) yield r.value;
+            } catch (err) {
+              // 途中で切れたら、その文はそこまでにする
+              if (!signal.aborted) log.warn("tts stream failed", { deviceId, ...errorFields(err) });
+            }
+          })();
+          return { audio: rest, sampleRate: st.sampleRate, characters: st.characters };
+        }
+      } catch (err) {
+        if (signal.aborted) throw err;
+        log.warn("tts stream failed, falling back", { deviceId: this.deviceId, ...errorFields(err) });
+      }
+    }
+    const r = await tts.synthesize(text, { signal });
+    return { audio: r.pcm, sampleRate: r.sampleRate, characters: r.characters };
   }
 
   private async speakFixed(text: string, outcome: TurnRecord["outcome"], errorKind?: string): Promise<void> {

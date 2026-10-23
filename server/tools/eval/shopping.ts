@@ -1,4 +1,5 @@
 // 003 AC4：買い物リストの会話が、期待どおりに保存される
+// 012 AC5：追加の返事の速さ
 import { leaks, newWorld, repeat } from "./harness.js";
 
 const names = (w: ReturnType<typeof newWorld>) => w.shopping.active("home").map((i) => i.name).sort();
@@ -32,4 +33,15 @@ const c = await repeat("関係のない質問で買い物リストの話をし�
   const ok = !leaks(answer) && /富士山/.test(answer) && !/買い物|洗剤|食パン/.test(answer);
   return { ok, detail: answer };
 });
-process.exit(a && b && c ? 0 : 1);
+// 012 AC5：追加の返事の、最初の文までの時間（中央値を改善前と比べる）
+const addMs: number[] = [];
+const d = await repeat("追加の速さ", 10, async () => {
+  const w = newWorld();
+  const answer = await w.say("牛乳を買い物リストに入れて");
+  addMs.push(w.firstSentenceMs[0]!);
+  const ok = !leaks(answer) && names(w).join(",") === "牛乳";
+  return { ok, detail: `[${w.firstSentenceMs[0]}ms] ${answer}` };
+});
+const sorted = [...addMs].sort((x, y) => x - y);
+console.log(`== 追加の最初の文まで：中央値 ${sorted[Math.floor(sorted.length / 2)]}ms（${sorted.join(", ")}）`);
+process.exit(a && b && c && d ? 0 : 1);

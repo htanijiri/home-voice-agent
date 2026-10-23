@@ -11,7 +11,7 @@ export interface LocalVadConfig {
   endMs: number;
 }
 
-export const DEFAULT_LOCAL_VAD: LocalVadConfig = { ratio: 3, minRms: 50, startMs: 300, endMs: 1200 };
+export const DEFAULT_LOCAL_VAD: LocalVadConfig = { ratio: 3, minRms: 50, startMs: 300, endMs: 800 };
 
 const SAMPLE_RATE = 16000;
 const FRAME_MS = 60;
@@ -30,6 +30,8 @@ export class LocalVad {
   private n = 0;
   started = false;
   ended = false;
+  /** 話し始めのあと、直前のフレームが声だった（本当の話し終わりの時刻を測るため。012） */
+  voicedNow = false;
 
   /** 話し始めの前で、いま声らしい音が続いている（話し始めと判断する手前） */
   get rising(): boolean {
@@ -61,6 +63,7 @@ export class LocalVad {
       if (rms >= this.threshold) {
         if (++this.run * FRAME_MS >= this.cfg.startMs) {
           this.started = true;
+          this.voicedNow = true;
           return "start";
         }
       } else {
@@ -70,7 +73,8 @@ export class LocalVad {
       return undefined;
     }
     // 話し始めのあとは、しきい値を固定して話し終わりを見る
-    this.quiet = rms >= this.threshold ? 0 : this.quiet + 1;
+    this.voicedNow = rms >= this.threshold;
+    this.quiet = this.voicedNow ? 0 : this.quiet + 1;
     if (this.quiet * FRAME_MS >= this.cfg.endMs) {
       this.ended = true;
       return "end";

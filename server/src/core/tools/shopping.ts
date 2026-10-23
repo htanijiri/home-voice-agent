@@ -21,6 +21,7 @@ function resolveItem(repo: ShoppingRepo, householdId: string, name: string): Sho
 export function shoppingTools(repo: ShoppingRepo): Tool[] {
   return [
     {
+      reply: true,
       def: {
         name: "shopping_add",
         description:
@@ -56,7 +57,14 @@ export function shoppingTools(repo: ShoppingRepo): Tool[] {
           .filter((b) => items.some((i) => b.name.includes(i.name.trim()) || i.name.trim().includes(b.name)))
           .map((b) => b.name)
           .filter((n) => !alreadyThere.includes(n));
-        return { added, already_there: alreadyThere, similar_existing: similar, total: repo.active(ctx.householdId).length };
+        return {
+          added,
+          already_there: alreadyThere,
+          similar_existing: similar,
+          total: repo.active(ctx.householdId).length,
+          // 既にあった・似たものがあったときは、結果を見て返事を作り直す
+          expected: alreadyThere.length === 0 && similar.length === 0,
+        };
       },
     },
     {
@@ -72,6 +80,7 @@ export function shoppingTools(repo: ShoppingRepo): Tool[] {
       },
     },
     {
+      reply: true,
       def: {
         name: "shopping_mark_bought",
         description: "買った品目をリストから外す（「最近買ったもの」として7日残る）。",
@@ -93,6 +102,7 @@ export function shoppingTools(repo: ShoppingRepo): Tool[] {
       },
     },
     {
+      reply: true,
       def: {
         name: "shopping_remove",
         description: "間違えて入れた品目などを、リストから削除する。",
@@ -114,6 +124,7 @@ export function shoppingTools(repo: ShoppingRepo): Tool[] {
       },
     },
     {
+      reply: true,
       def: {
         name: "shopping_clear",
         description:

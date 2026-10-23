@@ -1,6 +1,7 @@
 // Google Text-to-Speech のアダプター。SDK を使うのはこのファイルだけ。
 import { TextToSpeechClient } from "@google-cloud/text-to-speech";
-import type { TextToSpeech, TtsResult } from "../core/ports.js";
+import type { TextToSpeech, TtsResult, TtsStream } from "../core/ports.js";
+import { Queue } from "./queue.js";
 
 export interface GoogleTtsConfig {
   voice: string;
@@ -33,6 +34,46 @@ export class GoogleTts implements TextToSpeech {
     const body = buf.subarray(offset);
     const pcm = new Int16Array(body.buffer.slice(body.byteOffset, body.byteOffset + (body.byteLength & ~1)));
     return { pcm, sampleRate: SAMPLE_RATE, characters: [...text].length };
+  }
+
+  stream(text: string, opts?: { signal?: AbortSignal }): TtsStream {
+    const queue = new Queue<Int16Array | Error>();
+    const call = this.client.streamingSynthesize();
+    let odd: Buffer | undefined;
+    call.on("data", (res: { audioContent?: Uint8Array | string | null }) => {
+      if (!res.audioContent) return;
+      let buf = Buffer.from(res.audioContent as Uint8Array);
+      // 塊の境目で 16bit の標本が割れることがあるので、半端な1バイトは次の塊につなぐ
+      if (odd) buf = Buffer.concat([odd, buf]);
+      odd = buf.length & 1 ? buf.subarray(buf.length - 1) : undefined;
+      const even = buf.subarray(0, buf.length & ~1);
+      if (even.length) queue.push(new Int16Array(even.buffer.slice(even.byteOffset, even.byteOffset + even.length)));
+    });
+    call.on("error", (err: Error & { code?: number }) => {
+      // 自分で止めたとき（CANCELLED）はエラーにしない
+      if (err.code !== 1) queue.push(err);
+      queue.close();
+    });
+    call.on("end", () => queue.close());
+    opts?.signal?.addEventListener("abort", () => call.cancel(), { once: true });
+    call.write({
+      streamingConfig: {
+        voice: { languageCode: this.cfg.languageCode, name: this.cfg.voice },
+        streamingAudioConfig: { audioEncoding: "PCM", sampleRateHertz: SAMPLE_RATE, speakingRate: this.cfg.speakingRate },
+      },
+    });
+    call.write({ input: { text } });
+    call.end();
+    return {
+      sampleRate: SAMPLE_RATE,
+      characters: [...text].length,
+      chunks: (async function* () {
+        for await (const item of queue) {
+          if (item instanceof Error) throw item;
+          yield item;
+        }
+      })(),
+    };
   }
 
   async synthesizeOggOpus(text: string): Promise<{ ogg: Buffer; characters: number }> {
