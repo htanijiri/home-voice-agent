@@ -13,6 +13,8 @@ export interface ListenSummary {
   speechRms: number | null;
   /** 聞き取りの開始から、STT の話し始めの合図まで（来なければ null） */
   msToSpeechStart: number | null;
+  /** 聞き取りの開始から、サーバーの判定で話し始めたまで（011。判定しなければ null） */
+  msToLocalSpeechStart: number | null;
   /** 確定した結果の数 */
   finals: number;
   /** 確定した結果がすべて空だった（結果がないときも true） */
@@ -34,6 +36,7 @@ export class ListenStats {
   private frameSum = 0;
   private frameN = 0;
   private speechStartAt?: number;
+  private localSpeechStartAt?: number;
   private finals = 0;
   private nonEmptyFinals = 0;
 
@@ -61,6 +64,10 @@ export class ListenStats {
     this.speechStartAt ??= this.now();
   }
 
+  localSpeechStart(): void {
+    this.localSpeechStartAt ??= this.now();
+  }
+
   final(text: string): void {
     this.finals++;
     if (text.trim()) this.nonEmptyFinals++;
@@ -76,6 +83,7 @@ export class ListenStats {
       noiseRms: pct(0.1),
       speechRms: pct(0.9),
       msToSpeechStart: this.speechStartAt === undefined ? null : this.speechStartAt - this.startedAt,
+      msToLocalSpeechStart: this.localSpeechStartAt === undefined ? null : this.localSpeechStartAt - this.startedAt,
       finals: this.finals,
       emptyFinal: this.nonEmptyFinals === 0,
       ...(noSpeechReason ? { noSpeechReason } : {}),

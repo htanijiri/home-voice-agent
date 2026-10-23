@@ -30,6 +30,14 @@ export interface AppConfig {
     maxHistoryTurns: number;
     firstSentenceTimeoutSeconds: number;
     totalTimeoutSeconds: number;
+    /** サーバーでの話し始めの判定：まわりの音の何倍を声とみなすか（011） */
+    localVadRatio?: number;
+    /** 声とみなす RMS の下限 */
+    localVadMinRms?: number;
+    /** 声がこの長さ（ミリ秒）続いたら話し始め */
+    localVadStartMs?: number;
+    /** 話し始めのあと、静かな状態がこの長さ（ミリ秒）続いたら話し終わり */
+    localVadEndMs?: number;
   };
   limits: { dailyTurns: number };
   volume: { day: number; night: number; nightStart: string; nightEnd: string };

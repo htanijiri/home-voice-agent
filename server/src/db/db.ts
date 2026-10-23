@@ -116,6 +116,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE turns ADD COLUMN listen_empty_final INTEGER;
   ALTER TABLE turns ADD COLUMN no_speech_reason TEXT;
   `,
+  // 7: サーバーの判定で話し始めた時刻（011）
+  `
+  ALTER TABLE turns ADD COLUMN listen_ms_to_local_speech_start INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {

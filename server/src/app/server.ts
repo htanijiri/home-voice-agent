@@ -28,6 +28,7 @@ import { DeviceHub } from "./hub.js";
 import { FirmwareStore } from "./firmware.js";
 import { type OidcConfig, WebAuth } from "../web/auth.js";
 import { registerWeb } from "../web/routes.js";
+import { DEFAULT_LOCAL_VAD } from "../core/local-vad.js";
 import { ChangeFeed } from "./change-feed.js";
 import { JobRunner, type Job } from "./jobs.js";
 import { VolumePolicy } from "./volume-policy.js";
@@ -131,6 +132,12 @@ export function createApp(deps: AppDeps): App {
       maxUtteranceSeconds: config.conversation.maxUtteranceSeconds,
       contextKeepMinutes: config.conversation.contextKeepMinutes,
       maxHistoryTurns: config.conversation.maxHistoryTurns,
+      localVad: {
+        ratio: config.conversation.localVadRatio ?? DEFAULT_LOCAL_VAD.ratio,
+        minRms: config.conversation.localVadMinRms ?? DEFAULT_LOCAL_VAD.minRms,
+        startMs: config.conversation.localVadStartMs ?? DEFAULT_LOCAL_VAD.startMs,
+        endMs: config.conversation.localVadEndMs ?? DEFAULT_LOCAL_VAD.endMs,
+      },
     },
     hooks: {
       checkLimit: () =>

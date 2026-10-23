@@ -19,6 +19,7 @@
     "eval:no-hallucination": "tsx tools/eval/no-hallucination.ts",
     "eval:shopping": "tsx tools/eval/shopping.ts",
     "eval:reminder": "tsx tools/eval/reminder.ts",
+    "eval:late-speech": "tsx tools/eval/late-speech.ts",
     "report": "tsx src/cli/report.ts",
     "dev-local": "tsx tools/dev-local.ts",
     "check-google": "tsx tools/check-google.ts",

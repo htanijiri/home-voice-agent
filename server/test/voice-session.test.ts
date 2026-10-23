@@ -140,6 +140,93 @@ describe("VoiceSession", () => {
     expect(turns[2]!.listen!.noSpeechReason).toBeUndefined();
   });
 
+  describe("聞き取りの打ち切り（011）", () => {
+    const level = (rms: number) => new Int16Array(960).map((_, i) => (i % 2 ? rms : -rms));
+    const send = async (session: VoiceSession, rms: number, frames: number) => {
+      for (let i = 0; i < frames; i++) {
+        session.onAudio(level(rms));
+        await vi.advanceTimersByTimeAsync(60);
+      }
+    };
+
+    it("待ち時間が過ぎても、届いた声は捨てずに STT を閉じて確定を待ち、その文章で答える", async () => {
+      const stt = new FakeStt([{ afterEnd: [{ type: "final", text: "牛乳を追加して" }] }, "silent"]);
+      const { session, tts, turns } = setup({ llm: new FakeLlm([{ text: "追加しました。" }]), stt, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      // サーバーの判定に届かない小さな声のまま 6 秒が過ぎる
+      await send(session, 20, 100);
+      await flush();
+      // abort（声を捨てる）ではなく end して、返ってきた確定で答えた
+      expect(stt.streams[0]!.ended).toBe(true);
+      expect(tts.texts).toEqual(["追加しました。"]);
+      expect(turns[0]).toMatchObject({ outcome: "ok", userText: "牛乳を追加して" });
+    });
+
+    it("待ち時間が過ぎて、確定も空なら「聞き取れませんでした」（理由は timeout）", async () => {
+      const stt = new FakeStt([{ afterEnd: [] }]);
+      const { session, tts, turns } = setup({ llm: new FakeLlm([]), stt });
+      session.onListenStart();
+      await send(session, 20, 100);
+      await flush();
+      expect(tts.texts).toEqual([MESSAGES.noSpeech]);
+      expect(turns[0]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "timeout" } });
+    });
+
+    it("サーバーの判定で話し始めたら待ち時間で打ち切らず、静かになったら STT を閉じて確定を待つ", async () => {
+      const stt = new FakeStt([{ afterEnd: [{ type: "final", text: "クロックムッシュを追加して" }] }, "silent"]);
+      const { session, tts, turns } = setup({ llm: new FakeLlm([{ text: "追加しました。" }]), stt, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      await send(session, 20, 70); // 4.2 秒は静か
+      await send(session, 100, 40); // 4.2 秒から 2.4 秒話す（6 秒をまたぐ）
+      expect(stt.streams[0]!.ended).toBe(false);
+      expect(tts.texts).toEqual([]);
+      await send(session, 20, 25); // 1.2 秒静かになったら閉じる
+      await flush();
+      expect(stt.streams[0]!.ended).toBe(true);
+      expect(tts.texts).toEqual(["追加しました。"]);
+      expect(turns[0]!.listen).toMatchObject({ msToLocalSpeechStart: 4200 + 240, msToSpeechStart: null });
+    });
+
+    it("待ち時間が切れる瞬間に話し始めていたら、話し始めと判断できるまで待つ（文の頭で切らない）", async () => {
+      const stt = new FakeStt([{ afterEnd: [{ type: "final", text: "日本で一番高い山は" }] }, "silent"]);
+      const { session, turns } = setup({ llm: new FakeLlm([{ text: "富士山です。" }]), stt, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      await send(session, 20, 98); // 5.88 秒まで静か
+      await send(session, 100, 3); // 6 秒をまたいで話し始める
+      expect(stt.streams[0]!.ended).toBe(false);
+      await send(session, 100, 20);
+      expect(stt.streams[0]!.ended).toBe(false);
+      await send(session, 20, 25);
+      await flush();
+      expect(turns[0]).toMatchObject({ outcome: "ok", userText: "日本で一番高い山は" });
+    });
+
+    it("サーバーの判定で話し始めたが、確定が空なら「聞き取れませんでした」（理由は empty）", async () => {
+      const stt = new FakeStt([{ afterEnd: [] }]);
+      const { session, tts, turns } = setup({ llm: new FakeLlm([]), stt });
+      session.onListenStart();
+      await send(session, 20, 10);
+      await send(session, 300, 10);
+      await send(session, 20, 25);
+      await flush();
+      expect(tts.texts).toEqual([MESSAGES.noSpeech]);
+      expect(turns[0]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "empty" } });
+    });
+
+    it("追加の聞き取りで話し始めがなければ、何も言わずに待機に戻る", async () => {
+      const stt = new FakeStt([said("こんにちは"), "silent"]);
+      const { session, tts, sink } = setup({ llm: new FakeLlm([{ text: "こんにちは。" }]), stt });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush();
+      await send(session, 20, 140);
+      await flush();
+      expect(tts.texts).toEqual(["こんにちは。"]);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(stt.streams[1]!.aborted).toBe(true);
+    });
+  });
+
   it("LLM が失敗したら案内を読み上げる", async () => {
     const stt = new FakeStt([said("こんにちは"), "silent"]);
     const { session, tts, turns } = setup({ llm: new FakeLlm([{ error: new Error("boom") }]), stt });

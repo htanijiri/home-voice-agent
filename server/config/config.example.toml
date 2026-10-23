@@ -50,6 +50,13 @@ contextKeepMinutes = 5
 maxHistoryTurns = 10
 firstSentenceTimeoutSeconds = 15
 totalTimeoutSeconds = 60
+# サーバーでの話し始め・話し終わりの判定（Google の話し始めの合図は 0.6〜1.4 秒遅れるため、自分でも気づく）
+# まわりの音の何倍を声とみなすか／声とみなす大きさ（RMS）の下限
+localVadRatio = 3
+localVadMinRms = 50
+# 声がこの長さ（ミリ秒）続いたら話し始め。話し始めのあと、静かな状態がこの長さ続いたら話し終わり
+localVadStartMs = 300
+localVadEndMs = 1200
 
 [limits]
 # 1日（日本時間）の会話の回数の上限

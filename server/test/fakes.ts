@@ -67,7 +67,8 @@ export class FakeLlm implements LanguageModel {
 /** 台本で認識結果を返す STT。write された音声は数えるだけ */
 export class FakeStt implements SpeechToText {
   streams: FakeSttStream[] = [];
-  constructor(public script: (SttEvent[] | "silent")[] = []) {}
+  /** "silent"：何も返さない。{ afterEnd }：音声の間は何も返さず、end されたら返す（話し始めの合図が遅れる STT） */
+  constructor(public script: (SttEvent[] | "silent" | { afterEnd: SttEvent[] })[] = []) {}
   startStream(): SttStream {
     const s = new FakeSttStream(this.script.shift() ?? "silent");
     this.streams.push(s);
@@ -82,17 +83,18 @@ export class FakeSttStream implements SttStream {
   private queue: SttEvent[] = [];
   private wake?: () => void;
   private done = false;
-  constructor(private readonly plan: SttEvent[] | "silent") {}
+  constructor(private readonly plan: SttEvent[] | "silent" | { afterEnd: SttEvent[] }) {}
 
   write(pcm: Int16Array) {
     this.written += pcm.length;
     // 最初の音声で台本のイベントをすべて出す
-    if (this.written === pcm.length && this.plan !== "silent") {
+    if (this.written === pcm.length && Array.isArray(this.plan)) {
       this.queue.push(...this.plan);
       this.wake?.();
     }
   }
   end() {
+    if (!this.ended && !Array.isArray(this.plan) && this.plan !== "silent") this.queue.push(...this.plan.afterEnd);
     this.ended = true;
     this.done = true;
     this.wake?.();

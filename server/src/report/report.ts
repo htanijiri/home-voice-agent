@@ -75,6 +75,7 @@ const LISTEN_COLUMNS = [
   ["listen_speech_rms", "声の大きさ（RMS）"],
   ["listen_noise_rms", "まわりの音（RMS）"],
   ["listen_ms_to_speech_start", "話し始めの合図まで（ms）"],
+  ["listen_ms_to_local_speech_start", "サーバーが話し始めに気づくまで（ms）"],
   ["listen_ms_to_first_audio", "最初の音声が届くまで（ms）"],
   ["listen_max_gap_ms", "音声の最大の途切れ（ms）"],
   ["listen_audio_ms", "届いた音声の長さ（ms）"],

@@ -3,6 +3,7 @@
 import { errorFields, log } from "../log.js";
 import { ConversationError, type Orchestrator, trimHistory } from "./orchestrator.js";
 import { ListenStats, type ListenSummary } from "./listen-stats.js";
+import { DEFAULT_LOCAL_VAD, LocalVad, type LocalVadConfig } from "./local-vad.js";
 import type { Clock, SpeechToText, SttStream, TextToSpeech } from "./ports.js";
 import type { DeviceControl, ToolContext } from "./tools/registry.js";
 import type { ChatMessage } from "./types.js";
@@ -32,6 +33,8 @@ export interface VoiceSessionConfig {
   /** 待機に戻ってから、前の話を覚えておく分数 */
   contextKeepMinutes: number;
   maxHistoryTurns: number;
+  /** サーバーでの話し始め・話し終わりの判定（省略時は既定値） */
+  localVad?: LocalVadConfig;
 }
 
 export interface TurnTimings {
@@ -70,6 +73,10 @@ export const MESSAGES = {
 };
 
 const SAMPLE_RATE_IN = 16000;
+/** 待ち時間切れで STT を閉じたあと、確定を待つ上限 */
+const FINAL_WAIT_MS = 3000;
+/** 待ち時間が切れたとき、ちょうど声がし始めていたら待ち直す間隔 */
+const RISING_WAIT_MS = 120;
 
 export class VoiceSession {
   state: SessionState = "IDLE";
@@ -82,6 +89,8 @@ export class VoiceSession {
   private sttSamples = 0;
   private timings: TurnTimings = {};
   private listen?: ListenStats;
+  /** 聞き取り中の、サーバーでの声の判定 */
+  private onVad?: (pcm: Int16Array) => void;
   /** 直近の聞き取りの「聞き取れませんでした」の理由 */
   private noSpeechReason?: ListenSummary["noSpeechReason"];
   private closed = false;
@@ -127,6 +136,7 @@ export class VoiceSession {
     this.listen?.audio(pcm);
     this.sttSamples += pcm.length;
     this.stt.write(pcm);
+    this.onVad?.(pcm);
   }
 
   /** 端末が聞き取りを止めた（手動モードのボタンなど） */
@@ -157,45 +167,73 @@ export class VoiceSession {
     this.timings = { listenStartAt: Date.now() };
     const listen = new ListenStats();
     this.listen = listen;
+    const vad = new LocalVad(this.deps.config.localVad ?? DEFAULT_LOCAL_VAD);
     this.noSpeechReason = undefined;
     this.state = this.state === "SPEAKING" ? "FOLLOW_UP" : "LISTENING";
     this.sttSamples = 0;
     const stream = this.deps.stt.startStream();
     this.stt = stream;
     let spoke = false;
-    // 話し始めがなければ打ち切る
-    this.sttTimer = setTimeout(() => {
-      if (!spoke) {
-        this.stopStt();
-        if (this.state === "FOLLOW_UP") {
-          this.finishConversation();
-        } else {
-          this.noSpeechReason = "timeout";
-          void this.speakFixed(MESSAGES.noSpeech, "no_speech");
+    let timedOut = false;
+    const startSpeech = () => {
+      if (spoke) return;
+      spoke = true;
+      if (this.state === "FOLLOW_UP") this.state = "LISTENING";
+      clearTimeout(this.sttTimer);
+      this.utteranceTimer = setTimeout(() => stream.end(), this.deps.config.maxUtteranceSeconds * 1000);
+    };
+    // 話し始めは、STT の合図とサーバーでの判定の早いほうで決める（STT の合図は 0.6〜1.4 秒遅れるため）
+    this.onVad = (pcm) => {
+      for (const ev of vad.audio(pcm)) {
+        if (ev === "start") {
+          listen.localSpeechStart();
+          startSpeech();
+        } else if (spoke && !timedOut) {
+          // STT の話し終わりの合図より先に静かになったら、そこまでで確定させる
+          this.timings.speechEndAt ??= Date.now();
+          stream.end();
         }
       }
-    }, timeoutSeconds * 1000);
+    };
+    // 話し始めがなければ打ち切る。ただし届いた声は捨てず、STT を閉じて確定を待つ
+    const onTimeout = () => {
+      if (spoke) return;
+      // ちょうど話し始めたところなら、話し始めと判断できるまで待つ（文の頭で切らない）
+      if (vad.rising) {
+        this.sttTimer = setTimeout(onTimeout, RISING_WAIT_MS);
+        return;
+      }
+      if (this.state === "FOLLOW_UP") {
+        this.stopStt();
+        this.finishConversation();
+        return;
+      }
+      timedOut = true;
+      stream.end();
+      // 確定がいつまでも来なければ、あきらめる
+      this.sttTimer = setTimeout(() => {
+        if (this.stt !== stream) return;
+        this.stopStt();
+        this.noSpeechReason = "timeout";
+        void this.speakFixed(MESSAGES.noSpeech, "no_speech");
+      }, FINAL_WAIT_MS);
+    };
+    this.sttTimer = setTimeout(onTimeout, timeoutSeconds * 1000);
     void (async () => {
       const finals: string[] = [];
       try {
         for await (const ev of stream.events) {
-          if (ev.type === "speech_start") listen.speechStart();
-          if (ev.type === "speech_start" && !spoke) {
-            spoke = true;
-            if (this.state === "FOLLOW_UP") this.state = "LISTENING";
-            clearTimeout(this.sttTimer);
-            this.utteranceTimer = setTimeout(() => stream.end(), this.deps.config.maxUtteranceSeconds * 1000);
+          if (ev.type === "speech_start") {
+            listen.speechStart();
+            if (!timedOut) startSpeech();
           } else if (ev.type === "speech_end") {
-            this.timings.speechEndAt = Date.now();
+            this.timings.speechEndAt ??= Date.now();
             stream.end();
           } else if (ev.type === "final") {
             listen.final(ev.text);
             if (ev.text.trim()) finals.push(ev.text.trim());
             // 話し始めのイベントが来ない実装でも動くようにする
-            if (!spoke) {
-              spoke = true;
-              clearTimeout(this.sttTimer);
-            }
+            if (!spoke && !timedOut) startSpeech();
           } else if (ev.type === "error") {
             throw ev.error;
           }
@@ -210,11 +248,14 @@ export class VoiceSession {
       if (this.stt !== stream) return; // 途中で止められた
       this.deps.hooks?.sttUsage?.(this.sttSamples / SAMPLE_RATE_IN);
       this.stopStt();
-      if (!spoke) return; // 話し始めの待ち時間切れは、タイマー側で処理済み
       const text = finals.join("");
       this.timings.sttFinalAt = Date.now();
       if (!text) {
-        this.noSpeechReason = "empty";
+        if (!spoke && this.state === "FOLLOW_UP") {
+          this.finishConversation();
+          return;
+        }
+        this.noSpeechReason = spoke ? "empty" : "timeout";
         await this.speakFixed(MESSAGES.noSpeech, "no_speech");
         return;
       }
@@ -366,6 +407,7 @@ export class VoiceSession {
   }
 
   private stopStt(): void {
+    this.onVad = undefined;
     clearTimeout(this.sttTimer);
     clearTimeout(this.utteranceTimer);
     const s = this.stt;

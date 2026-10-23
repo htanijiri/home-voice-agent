@@ -21,6 +21,7 @@ export interface TurnRow {
   listen_noise_rms: number | null;
   listen_speech_rms: number | null;
   listen_ms_to_speech_start: number | null;
+  listen_ms_to_local_speech_start: number | null;
   listen_finals: number | null;
   listen_empty_final: number | null;
   no_speech_reason: string | null;
@@ -39,8 +40,8 @@ export class TurnsRepo {
         `INSERT INTO turns (device_id, created_at, user_text, assistant_text, outcome, error_kind,
           ms_listen_to_speech_end, ms_speech_end_to_stt, ms_stt_to_first_sentence, ms_first_sentence_to_audio, ms_total,
           listen_audio_ms, listen_ms_to_first_audio, listen_max_gap_ms, listen_noise_rms, listen_speech_rms,
-          listen_ms_to_speech_start, listen_finals, listen_empty_final, no_speech_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          listen_ms_to_speech_start, listen_ms_to_local_speech_start, listen_finals, listen_empty_final, no_speech_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         rec.deviceId,
@@ -60,6 +61,7 @@ export class TurnsRepo {
         l?.noiseRms ?? null,
         l?.speechRms ?? null,
         l?.msToSpeechStart ?? null,
+        l?.msToLocalSpeechStart ?? null,
         l?.finals ?? null,
         l ? Number(l.emptyFinal) : null,
         l?.noSpeechReason ?? null,
