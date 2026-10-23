@@ -132,6 +132,7 @@
   - 6 秒の数え始めは、端末が listen start を送った時点。xiaozhi v2.5.2 では、Listening への状態変化の処理の中で、ランプを緑にし（`led->OnStateChanged()`）、listen start を送り、「ポン」を鳴らす（`StartListeningAudio`）ので、ほぼ同時。ウェイクワードの音声は送らない設定（`CONFIG_SEND_WAKE_WORD_DATA` なし）
   - 合図の前に STT を end しても、確定の文章は正しく返る。abort ではなく end して確定を待つのが肝心
   - 対処：サーバーでも声の大きさで話し始め・話し終わりを判定する（`LocalVad`。まわりの音の 3 倍・下限 50・300ms）。待ち時間が切れたら end して確定を待つ。切れる瞬間に声がし始めていたら 120ms ずつ待ち直す（これがないと、6 秒ちょうどで話し始めた文が「日本」だけになった）
+  - 実機での効果（キッチンから9回）：9回とも聞き取れた。うち5回は Google の合図が最後まで来ず、サーバーの判定と end で文章を得た。サーバーの判定は緑から 0.5〜2.8 秒、Google の合図（来た回）はその 0.4〜0.6 秒後
   - 確かめ方：`npm run eval:late-speech`（本物の STT に、遠くの声の大きさで、声の始まりを 5.5 秒後にずらして流す）
 - **確認画面の自動更新（SSE）の落とし穴**
   - Fastify で `reply.hijack()` して SSE を書くとき、片付けを `req.raw.on("close")` で行うと、つないだ直後に購読が外れる。Node.js の `IncomingMessage` の close は本文を読み終えた時点で来るため。`res.on("close")` を使う
