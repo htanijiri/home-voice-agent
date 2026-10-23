@@ -88,7 +88,7 @@ export function reminderTools(repo: RemindersRepo, tz: string): Tool[] {
           "リマインダーを登録する。結果の when を使って、登録した日時をユーザーに言い直して確かめる。エラーが ask_user で始まるときは、その内容をユーザーに聞き返す（推測で登録しない）。",
         inputSchema: {
           type: "object",
-          properties: { title: { type: "string", description: "知らせる内容（例：ゴミ出し）" }, when: WHEN_SCHEMA },
+          properties: { title: { type: "string", description: "時刻になったら、そのまま読み上げる言葉。ユーザーの言い方をなるべくそのまま使う（例：「6時に『お風呂を沸かして』って教えて」→ お風呂を沸かして。「8時にゴミ出しを教えて」→ ゴミ出し）" }, when: WHEN_SCHEMA },
           required: ["title", "when"],
           additionalProperties: false,
         },

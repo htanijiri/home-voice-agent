@@ -2,6 +2,7 @@
 //   - 反応（呼びかけ・ボタン・会話の開始）が retryMinutes 以内になければ、もう1回だけ送る
 //   - 会話中なら、会話が終わってから送る
 //   - 端末がつながっていなければ待ち、遅れが maxLateMinutes 以内なら「遅れてお知らせします」を付けて送る。
+//   - 読み上げるのは、登録した内容だけ（「〇〇の時間です」は付けない）。
 //     それより古いものは missed にして、次の会話の最初に伝える
 //   - 同じ回を二重に送らないよう、通知の記録（reminder_deliveries）は1回の予定につき1行にする
 import type { Clock, TextToSpeech } from "../core/ports.js";
@@ -22,9 +23,10 @@ export interface ReminderSchedulerConfig {
 
 const LATE_THRESHOLD_MS = 60_000;
 
+/** 読み上げる文。登録した内容をそのまま読み、文の終わりに句点がなければ足す */
 export function notifyText(rows: DeliveryRow[], late: boolean): string {
-  const titles = [...new Set(rows.map((r) => r.title))].join("と、");
-  return late ? `遅れてお知らせします。${titles}の時間でした。` : `${titles}の時間です。`;
+  const body = [...new Set(rows.map((r) => r.title.trim()))].map((t) => (/[。．.！!？?…]$/.test(t) ? t : `${t}。`)).join("");
+  return late ? `遅れてお知らせします。${body}` : body;
 }
 
 export class ReminderScheduler {

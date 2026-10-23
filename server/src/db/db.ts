@@ -104,6 +104,18 @@ const MIGRATIONS: string[] = [
     expires_at TEXT NOT NULL
   );
   `,
+  // 6: 聞き取りの様子（009）。数字だけで、音声や文章は入れない
+  `
+  ALTER TABLE turns ADD COLUMN listen_audio_ms INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_ms_to_first_audio INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_max_gap_ms INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_noise_rms INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_speech_rms INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_ms_to_speech_start INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_finals INTEGER;
+  ALTER TABLE turns ADD COLUMN listen_empty_final INTEGER;
+  ALTER TABLE turns ADD COLUMN no_speech_reason TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

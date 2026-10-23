@@ -1,4 +1,5 @@
 // 004 AC8：リマインダーの会話。日時が正しく保存され、時刻がなければ聞き返す
+// 010 AC3：内容は言い方をそのまま使う
 import { leaks, newWorld, repeat } from "./harness.js";
 
 const at = (w: ReturnType<typeof newWorld>) => w.reminders.active("home").map((r) => r.next_fire_at);
@@ -32,4 +33,12 @@ const c = await repeat("来週の金曜・毎週の繰り返し", 3, async () =>
     garbage.schedule.time === "07:30";
   return { ok, detail: JSON.stringify(rs.map((r) => ({ t: r.title, s: r.schedule, n: r.next_fire_at }))) };
 });
-process.exit(a && b && c ? 0 : 1);
+// 010 AC3：言い方をそのまま内容にする（時刻にはそのまま読み上げる）
+const d = await repeat("言い方をそのまま内容にする", 5, async () => {
+  const w = newWorld();
+  const answer = await w.say("6時に「お風呂を沸かして」ってリマインダーして");
+  const rs = w.reminders.active("home");
+  const ok = !leaks(answer) && rs.length === 1 && rs[0]!.title.replace(/[。！!]$/, "") === "お風呂を沸かして";
+  return { ok, detail: `[${w.firstSentenceMs}ms] ${rs.map((r) => r.title).join(",")} / ${answer}` };
+});
+process.exit(a && b && c && d ? 0 : 1);

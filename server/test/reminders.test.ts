@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ToolRegistry } from "../src/core/tools/registry.js";
+import { notifyText } from "../src/app/reminder-scheduler.js";
 import { reminderTools } from "../src/core/tools/reminders.js";
 import { openDb } from "../src/db/db.js";
 import { RemindersRepo } from "../src/db/reminders-repo.js";
@@ -110,6 +111,17 @@ async function schedulerSetup() {
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
+describe("読み上げる文（010）", () => {
+  const row = (title: string) => ({ title }) as Parameters<typeof notifyText>[0][number];
+  it("登録した内容だけを読み、句点を重ねない", () => {
+    expect(notifyText([row("洗濯物を取り込んで")], false)).toBe("洗濯物を取り込んで。");
+    expect(notifyText([row("ゴミ出しの時間です。")], false)).toBe("ゴミ出しの時間です。");
+    expect(notifyText([row("起きて！")], false)).toBe("起きて！");
+    expect(notifyText([row("お風呂を沸かして"), row("お風呂を沸かして"), row("薬を飲む？")], false)).toBe("お風呂を沸かして。薬を飲む？");
+    expect(notifyText([row("ゴミ出し")], true)).toBe("遅れてお知らせします。ゴミ出し。");
+  });
+});
+
 describe("スケジューラー", () => {
   it("時刻になると notify を送る。音声の URL は1回だけ取れる", async () => {
     const s = await schedulerSetup();
@@ -122,8 +134,8 @@ describe("スケジューラー", () => {
     await settle();
     const n = s.notifies(dev);
     expect(n).toHaveLength(1);
-    expect(n[0]!.subtitles[0].text).toBe("ゴミ出しの時間です。");
-    expect(s.tts.texts).toContain("ゴミ出しの時間です。");
+    expect(n[0]!.subtitles[0].text).toBe("ゴミ出し。");
+    expect(s.tts.texts).toContain("ゴミ出し。");
     const url = new URL(n[0]!.audio_url);
     expect((await fetch(new URL(url.pathname, s.base))).status).toBe(200);
     expect((await fetch(new URL(url.pathname, s.base))).status).toBe(404);
@@ -167,7 +179,7 @@ describe("スケジューラー", () => {
     await s.app.scheduler.tick();
     await settle();
     expect(s.notifies(dev)).toHaveLength(1);
-    expect(s.notifies(dev)[0]!.subtitles[0].text).toBe("ゴミ出しと、洗濯物の時間です。");
+    expect(s.notifies(dev)[0]!.subtitles[0].text).toBe("ゴミ出し。洗濯物。");
   });
 
   it("会話中は待ち、会話が終わってから送る", async () => {
@@ -193,7 +205,7 @@ describe("スケジューラー", () => {
     const dev = await s.connect(); // つながると tick が走る
     await s.app.scheduler.tick();
     await settle();
-    expect(s.notifies(dev)[0]!.subtitles[0].text).toBe("遅れてお知らせします。ゴミ出しの時間でした。");
+    expect(s.notifies(dev)[0]!.subtitles[0].text).toBe("遅れてお知らせします。ゴミ出し。");
   });
 
   it("2時間より古いものは送らず、次の会話の最初に伝える（伝えたら繰り返さない）", async () => {
@@ -255,7 +267,7 @@ describe("スケジューラー", () => {
     s.add("ゴミ出し", "2026-10-20T10:00");
     await s.app.scheduler.tick();
     await settle();
-    expect(dev.json.find((m) => m.type === "alert")?.message).toBe("ゴミ出しの時間です。");
+    expect(dev.json.find((m) => m.type === "alert")?.message).toBe("ゴミ出し。");
   });
 });
 

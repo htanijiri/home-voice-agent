@@ -2,6 +2,7 @@
 // 通信方式（WebSocket / MQTT＋UDP）には依存しない。通信の口は DeviceSink と、on* メソッドの呼び出しでつなぐ。
 import { errorFields, log } from "../log.js";
 import { ConversationError, type Orchestrator, trimHistory } from "./orchestrator.js";
+import { ListenStats, type ListenSummary } from "./listen-stats.js";
 import type { Clock, SpeechToText, SttStream, TextToSpeech } from "./ports.js";
 import type { DeviceControl, ToolContext } from "./tools/registry.js";
 import type { ChatMessage } from "./types.js";
@@ -49,6 +50,8 @@ export interface TurnRecord {
   outcome: "ok" | "no_speech" | "error" | "limit" | "aborted";
   errorKind?: string;
   timings: TurnTimings;
+  /** 聞き取りの様子（009）。聞き取りを伴わない記録にはない */
+  listen?: ListenSummary;
 }
 
 export interface SessionHooks {
@@ -78,6 +81,9 @@ export class VoiceSession {
   private turnAbort?: AbortController;
   private sttSamples = 0;
   private timings: TurnTimings = {};
+  private listen?: ListenStats;
+  /** 直近の聞き取りの「聞き取れませんでした」の理由 */
+  private noSpeechReason?: ListenSummary["noSpeechReason"];
   private closed = false;
 
   constructor(
@@ -118,6 +124,7 @@ export class VoiceSession {
   onAudio(pcm: Int16Array): void {
     if (this.state !== "LISTENING" && this.state !== "FOLLOW_UP") return;
     if (!this.stt) return;
+    this.listen?.audio(pcm);
     this.sttSamples += pcm.length;
     this.stt.write(pcm);
   }
@@ -148,6 +155,9 @@ export class VoiceSession {
   private startListening(timeoutSeconds: number): void {
     this.stopStt();
     this.timings = { listenStartAt: Date.now() };
+    const listen = new ListenStats();
+    this.listen = listen;
+    this.noSpeechReason = undefined;
     this.state = this.state === "SPEAKING" ? "FOLLOW_UP" : "LISTENING";
     this.sttSamples = 0;
     const stream = this.deps.stt.startStream();
@@ -160,6 +170,7 @@ export class VoiceSession {
         if (this.state === "FOLLOW_UP") {
           this.finishConversation();
         } else {
+          this.noSpeechReason = "timeout";
           void this.speakFixed(MESSAGES.noSpeech, "no_speech");
         }
       }
@@ -168,6 +179,7 @@ export class VoiceSession {
       const finals: string[] = [];
       try {
         for await (const ev of stream.events) {
+          if (ev.type === "speech_start") listen.speechStart();
           if (ev.type === "speech_start" && !spoke) {
             spoke = true;
             if (this.state === "FOLLOW_UP") this.state = "LISTENING";
@@ -177,6 +189,7 @@ export class VoiceSession {
             this.timings.speechEndAt = Date.now();
             stream.end();
           } else if (ev.type === "final") {
+            listen.final(ev.text);
             if (ev.text.trim()) finals.push(ev.text.trim());
             // 話し始めのイベントが来ない実装でも動くようにする
             if (!spoke) {
@@ -201,6 +214,7 @@ export class VoiceSession {
       const text = finals.join("");
       this.timings.sttFinalAt = Date.now();
       if (!text) {
+        this.noSpeechReason = "empty";
         await this.speakFixed(MESSAGES.noSpeech, "no_speech");
         return;
       }
@@ -331,6 +345,10 @@ export class VoiceSession {
 
   private record(userText: string, assistantText: string, outcome: TurnRecord["outcome"], errorKind?: string) {
     this.timings.doneAt = Date.now();
+    const listen = this.listen?.summary(outcome === "no_speech" ? this.noSpeechReason : undefined);
+    // 同じ聞き取りを2回記録しない
+    this.listen = undefined;
+    if (listen) log.info("listen summary", { deviceId: this.deviceId, outcome, ...listen });
     this.deps.hooks?.onTurn?.({
       deviceId: this.deviceId,
       userText,
@@ -338,6 +356,7 @@ export class VoiceSession {
       outcome,
       errorKind,
       timings: this.timings,
+      ...(listen ? { listen } : {}),
     });
   }
 

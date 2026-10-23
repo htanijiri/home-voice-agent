@@ -113,6 +113,33 @@ describe("VoiceSession", () => {
     expect(sink.events.at(-1)).toBe("end");
   });
 
+  it("聞き取りの様子を記録する：話し始めの合図が来ない（timeout）／結果が空（empty）／うまくいった（009）", async () => {
+    const loud = new Int16Array(960).fill(1000);
+    const quiet = new Int16Array(960).fill(10);
+    const stt = new FakeStt(["silent", [{ type: "speech_start" }, { type: "final", text: "" }, { type: "speech_end" }], said("こんにちは"), "silent"]);
+    const { session, turns } = setup({ llm: new FakeLlm([{ text: "はい。" }]), stt, cfg: { followUpSeconds: 0 } });
+
+    session.onListenStart();
+    session.onAudio(quiet);
+    await vi.advanceTimersByTimeAsync(120);
+    session.onAudio(quiet);
+    await vi.advanceTimersByTimeAsync(6000);
+    await flush();
+    expect(turns[0]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "timeout", msToSpeechStart: null, finals: 0, emptyFinal: true, audioMs: 120, maxGapMs: 120, noiseRms: 10, speechRms: 10 } });
+
+    session.onListenStart();
+    session.onAudio(loud);
+    await flush();
+    expect(turns[1]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "empty", msToSpeechStart: 0, finals: 1, emptyFinal: true, speechRms: 1000 } });
+
+    session.onListenStart();
+    for (const f of [quiet, quiet, loud]) session.onAudio(f);
+    await flush();
+    expect(turns[2]!.outcome).toBe("ok");
+    expect(turns[2]!.listen).toMatchObject({ finals: 1, emptyFinal: false, noiseRms: 10, speechRms: 1000 });
+    expect(turns[2]!.listen!.noSpeechReason).toBeUndefined();
+  });
+
   it("LLM が失敗したら案内を読み上げる", async () => {
     const stt = new FakeStt([said("こんにちは"), "silent"]);
     const { session, tts, turns } = setup({ llm: new FakeLlm([{ error: new Error("boom") }]), stt });
