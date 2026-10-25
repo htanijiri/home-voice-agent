@@ -138,6 +138,9 @@
   - TTS（Chirp 3 HD）は、まとめての合成で 0.4〜0.9 秒、`streamingSynthesize`（PCM 24kHz）なら最初の塊まで 0.16〜0.26 秒。声も話す速さ（`streamingAudioConfig.speakingRate`）も同じにできる。塊の境目で 16bit の標本が割れることがあるので、半端な1バイトは次の塊につなぐ
   - 操作のツールでは LLM を2回呼んでいた（ツールを呼ぶ → 結果を見て返事）。ツールの入力に `reply`（うまくいったら言う言葉）を足し、結果が思ったとおり（`expected`）なら2回目を省く。評価で、追加の最初の文まで中央値 1596ms → 1019ms。履歴は「tool_use → tool_result → reply のテキスト」の形にすれば、次の発話もそのまま続けられる
   - リマインダーの登録・変更には `reply` を使わない（解決した日時で言い直して確かめるため）
+- **max_tokens が考える分で尽きる（spec 013）**
+  - Haiku 5.5 は thinking（adaptive）がオンなので、`max_tokens` には考える分も含まれる。400 では、ツールを2つ呼ぶ発話（「もういいよ、牛乳も入れといて」）で考える分が増え、ツールの呼び出しの途中で stop_reason が max_tokens になった。結果のない tool_use を履歴に残すと次の問い合わせがエラーになる
+  - 対処：`maxTokens` を 800 にし、ツールの途中の max_tokens は失敗として扱う（履歴に残さない）。返事の長さはプロンプト（1〜3文）で抑えている
 - **確認画面の自動更新（SSE）の落とし穴**
   - Fastify で `reply.hijack()` して SSE を書くとき、片付けを `req.raw.on("close")` で行うと、つないだ直後に購読が外れる。Node.js の `IncomingMessage` の close は本文を読み終えた時点で来るため。`res.on("close")` を使う
   - `EventSource` は、ネットワークの切断ならつながり直すが、200 以外の応答（デプロイ中の 502/503 など）では閉じたままになる。`readyState === CLOSED` を見て作り直す
