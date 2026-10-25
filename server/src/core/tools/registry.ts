@@ -12,6 +12,8 @@ export interface ToolContext {
   householdId: string;
   now: Date;
   device?: DeviceControl;
+  /** 会話を終えて、続けての聞き取りをせずに待機に戻る（013） */
+  endConversation?: () => void;
 }
 
 export interface Tool {
@@ -23,6 +25,8 @@ export interface Tool {
    * 思ったとおりでない結果（既にあった、など）は、run の戻り値に expected: false を入れて知らせる
    */
   reply?: boolean;
+  /** reply がないときは、結果を LLM に返さずにその回を終えてよい（013：end_conversation） */
+  terminal?: boolean;
 }
 
 /** reply の説明。操作のツールの入力に足す */
@@ -54,6 +58,11 @@ export class ToolRegistry {
     return [...this.tools.values()]
       .map((t) => (t.reply ? withReply(t.def) : t.def))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** reply がなければ、結果を LLM に返さずに終えてよいツールか */
+  isTerminal(name: string): boolean {
+    return this.tools.get(name)?.terminal === true;
   }
 
   /** reply を受け付けるツールか */

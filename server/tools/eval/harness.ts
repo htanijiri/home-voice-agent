@@ -10,6 +10,8 @@ import { makeTurnNote } from "../../src/core/turn-note.js";
 import { ToolRegistry } from "../../src/core/tools/registry.js";
 import { reminderTools } from "../../src/core/tools/reminders.js";
 import { shoppingTools } from "../../src/core/tools/shopping.js";
+import { conversationTools } from "../../src/core/tools/conversation.js";
+import { FOLLOW_UP_NOTE } from "../../src/core/voice-session.js";
 import type { ChatMessage } from "../../src/core/types.js";
 import { openDb } from "../../src/db/db.js";
 import { RemindersRepo } from "../../src/db/reminders-repo.js";
@@ -25,7 +27,7 @@ export function newWorld(now = new Date("2026-10-20T10:00:00+09:00")) {
   const db = openDb(":memory:");
   const shopping = new ShoppingRepo(db);
   const reminders = new RemindersRepo(db, "Asia/Tokyo");
-  const tools = new ToolRegistry().register(...shoppingTools(shopping), ...reminderTools(reminders, "Asia/Tokyo"));
+  const tools = new ToolRegistry().register(...shoppingTools(shopping), ...reminderTools(reminders, "Asia/Tokyo"), ...conversationTools());
   const clock: Clock = { now: () => now };
   const llm = new AnthropicLlm({ apiKey: apiKey!, ...config.llm });
   const o = new Orchestrator(
@@ -38,16 +40,21 @@ export function newWorld(now = new Date("2026-10-20T10:00:00+09:00")) {
   );
   const history: ChatMessage[] = [];
   const firstSentenceMs: number[] = [];
-  const say = async (text: string) => {
+  const state = { ended: false };
+  /** followUp：返事のあとの、呼びかけなしの続けての聞き取りとして渡す（013） */
+  const say = async (text: string, opts: { followUp?: boolean } = {}) => {
     let out = "";
     const t0 = Date.now();
-    for await (const s of o.respond({ history, userText: text, ctx: { deviceId: "eval", householdId: "home", now } })) {
+    state.ended = false;
+    const ctx = { deviceId: "eval", householdId: "home", now, endConversation: () => (state.ended = true) };
+    const systemNotes = opts.followUp ? [FOLLOW_UP_NOTE] : undefined;
+    for await (const s of o.respond({ history, userText: text, ctx, systemNotes })) {
       if (!out) firstSentenceMs.push(Date.now() - t0);
       out += s;
     }
     return out;
   };
-  return { db, shopping, reminders, say, history, firstSentenceMs };
+  return { db, shopping, reminders, say, history, firstSentenceMs, ended: () => state.ended };
 }
 
 /** Claude Haiku に、条件を満たすかを判定させる（YES / NO） */

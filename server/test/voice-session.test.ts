@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/core/orchestrator.js";
+import { conversationTools } from "../src/core/tools/conversation.js";
 import { ToolRegistry } from "../src/core/tools/registry.js";
 import { MESSAGES, type TurnRecord, VoiceSession, type VoiceSessionConfig } from "../src/core/voice-session.js";
 import { FakeClock, FakeLlm, FakeStreamingTts, FakeStt, FakeTts, RecordingSink, said } from "./fakes.js";
@@ -18,7 +19,7 @@ function setup(opts: { llm: FakeLlm; stt: FakeStt; cfg?: Partial<VoiceSessionCon
   const tts = opts.tts ?? new FakeTts();
   const sink = new RecordingSink();
   const turns: TurnRecord[] = [];
-  const orchestrator = new Orchestrator(opts.llm, new ToolRegistry(), "sys", () => "", clock, {
+  const orchestrator = new Orchestrator(opts.llm, new ToolRegistry().register(...conversationTools()), "sys", () => "", clock, {
     firstSentenceTimeoutMs: 15000,
     totalTimeoutMs: 60000,
     maxToolRounds: 3,
@@ -255,6 +256,54 @@ describe("VoiceSession", () => {
       await flush(60);
       expect(tts.texts).toEqual(["こんにちは。"]);
       expect(sink.samples).toEqual([240]);
+    });
+  });
+
+  describe("会話の終わり方（013）", () => {
+    it("end_conversation に reply があれば読み上げ、続けての聞き取りをせずに待機に戻る", async () => {
+      const stt = new FakeStt([said("もういいよ")]);
+      const llm = new FakeLlm([{ toolUses: [{ name: "end_conversation", input: { reply: "はい、またね。" } }] }]);
+      const { session, sink, tts, turns } = setup({ llm, stt });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      expect(tts.texts).toEqual(["はい、またね。"]);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(stt.streams).toHaveLength(1);
+      expect(session.state).toBe("IDLE");
+      expect(turns[0]).toMatchObject({ outcome: "ok", assistantText: "はい、またね。" });
+    });
+
+    it("続けての聞き取りの発話には補足を添え、reply のない end_conversation なら黙って待機に戻る", async () => {
+      const stt = new FakeStt([said("天気どう"), said("それでさ明日の会議なんだけど")]);
+      const llm = new FakeLlm([{ text: "まだ天気にはつながっていません。" }, { toolUses: [{ name: "end_conversation", input: {} }] }]);
+      const { session, sink, tts, turns } = setup({ llm, stt });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      session.onAudio(frame); // 続けての聞き取りで拾った声
+      await flush(40);
+      const noteOf = (i: number) => JSON.stringify(llm.requests[i]!.messages.at(-1));
+      expect(noteOf(0)).not.toContain("続けての聞き取り");
+      expect(noteOf(1)).toContain("続けての聞き取り");
+      expect(tts.texts).toEqual(["まだ天気にはつながっていません。"]);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(turns[1]).toMatchObject({ outcome: "ok", assistantText: "", errorKind: "ignored" });
+      // 拾った声は、次の発話の文脈に残さない
+      expect(session.history.map((m) => m.role)).toEqual(["user", "assistant"]);
+    });
+
+    it("続けての聞き取りで言葉にならなかったときは「聞き取れませんでした」と言わずに待機に戻る", async () => {
+      const stt = new FakeStt([said("こんにちは"), [{ type: "speech_start" }, { type: "final", text: "" }, { type: "speech_end" }]]);
+      const { session, sink, tts, turns } = setup({ llm: new FakeLlm([{ text: "こんにちは。" }]), stt });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      session.onAudio(frame);
+      await flush(40);
+      expect(tts.texts).toEqual(["こんにちは。"]);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(turns[1]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "empty" } });
     });
   });
 

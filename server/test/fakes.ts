@@ -26,7 +26,7 @@ export class FakeClock implements Clock {
 /** 応答を台本で決める LLM。台本の各要素は、1回の呼び出しで返すメッセージ */
 export type ScriptStep =
   | { text: string }
-  | { toolUses: { name: string; input: unknown }[]; text?: string }
+  | { toolUses: { name: string; input: unknown }[]; text?: string; stopReason?: string }
   | { error: Error }
   | { hang: true };
 
@@ -52,7 +52,7 @@ export class FakeLlm implements LanguageModel {
     }
     let stopReason = "end_turn";
     if ("toolUses" in step) {
-      stopReason = "tool_use";
+      stopReason = step.stopReason ?? "tool_use";
       step.toolUses.forEach((u, i) => content.push({ type: "tool_use", id: `tu_${i}`, name: u.name, input: u.input }));
     }
     yield {

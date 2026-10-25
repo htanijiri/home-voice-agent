@@ -266,5 +266,53 @@ describe("操作の返事を先に決める（reply、012）", () => {
     expect(await collect(o.respond({ history: [], userText: "x", ctx }))).toEqual(["牛乳を追加しました。", "パンも追加しました。"]);
     expect(llm.requests).toHaveLength(1);
   });
+
+  it("reply のない terminal のツール（end_conversation）だけなら、何も言わず、2回目の問い合わせもせず、履歴にも残さない（013）", async () => {
+    const end: Tool = {
+      reply: true,
+      terminal: true,
+      def: { name: "end_conversation", description: "", inputSchema: { type: "object", properties: {} } },
+      async run(_i, c) {
+        c.endConversation?.();
+        return { ok: true };
+      },
+    };
+    let ended = false;
+    const llm = new FakeLlm([{ toolUses: [{ name: "end_conversation", input: {} }] }]);
+    const o = new Orchestrator(llm, new ToolRegistry().register(end, add), "sys", () => "", new FakeClock(), cfg);
+    const history: ChatMessage[] = [];
+    const out = await collect(o.respond({ history, userText: "x", ctx: { ...ctx, endConversation: () => (ended = true) } }));
+    expect(out).toEqual([]);
+    expect(ended).toBe(true);
+    expect(llm.requests).toHaveLength(1);
+    expect(history).toEqual([]);
+    // 頼みごとと一緒なら、reply がそろっていればつないで読み上げる
+    const llm2 = new FakeLlm([{ toolUses: [{ name: "add", input: { name: "牛乳", reply: "牛乳を追加しました。" } }, { name: "end_conversation", input: { reply: "またね。" } }] }]);
+    const o2 = new Orchestrator(llm2, new ToolRegistry().register(end, add), "sys", () => "", new FakeClock(), cfg);
+    expect(await collect(o2.respond({ history: [], userText: "x", ctx }))).toEqual(["牛乳を追加しました。", "またね。"]);
+  });
+
+  it("terminal のツールに reply がなくても、ほかのツールの reply で答えて終える（013）", async () => {
+    const end: Tool = {
+      reply: true,
+      terminal: true,
+      def: { name: "end_conversation", description: "", inputSchema: { type: "object", properties: {} } },
+      async run() {
+        return { ok: true };
+      },
+    };
+    const llm = new FakeLlm([{ toolUses: [{ name: "add", input: { name: "牛乳", reply: "牛乳を追加しました。またね。" } }, { name: "end_conversation", input: {} }] }]);
+    const o = new Orchestrator(llm, new ToolRegistry().register(end, add), "sys", () => "", new FakeClock(), cfg);
+    expect(await collect(o.respond({ history: [], userText: "x", ctx }))).toEqual(["牛乳を追加しました。", "またね。"]);
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it("ツールの呼び出しの途中で上限（max_tokens）に達したら失敗にし、履歴に残さない（013）", async () => {
+    const llm = new FakeLlm([{ toolUses: [{ name: "add", input: {} }], stopReason: "max_tokens" }]);
+    const o = new Orchestrator(llm, tools(), "sys", () => "", new FakeClock(), cfg);
+    const history: ChatMessage[] = [];
+    await expect(collect(o.respond({ history, userText: "x", ctx }))).rejects.toMatchObject({ kind: "llm" });
+    expect(history).toEqual([]);
+  });
 });
 

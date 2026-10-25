@@ -20,7 +20,8 @@ udpPort = 8884
 
 [llm]
 model = "claude-haiku-5-5"
-maxTokens = 400
+# 返事の長さの上限（考える分も含む）。400 では、ツールを2つ呼ぶときに考える分で上限に達することがあった（013）
+maxTokens = 800
 # 返事の速さを優先して低めにする（low / medium / high）
 effort = "low"
 

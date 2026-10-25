@@ -75,6 +75,8 @@ export const MESSAGES = {
 };
 
 const SAMPLE_RATE_IN = 16000;
+/** 続けての聞き取りの発話に添える補足（どう扱うかはシステムプロンプトに書く） */
+export const FOLLOW_UP_NOTE = "この発話は、返事のあとに「アイリス」の呼びかけなしで聞き取ったもの（続けての聞き取り）。";
 /** 待ち時間切れで STT を閉じたあと、確定を待つ上限 */
 const FINAL_WAIT_MS = 3000;
 /** 待ち時間が切れたとき、ちょうど声がし始めていたら待ち直す間隔 */
@@ -95,6 +97,8 @@ export class VoiceSession {
   private onVad?: (pcm: Int16Array) => void;
   /** 直近の聞き取りの「聞き取れませんでした」の理由 */
   private noSpeechReason?: ListenSummary["noSpeechReason"];
+  /** この回の返事のあと、続けての聞き取りをせずに待機に戻る（013） */
+  private endRequested = false;
   private closed = false;
 
   constructor(
@@ -171,6 +175,8 @@ export class VoiceSession {
     this.listen = listen;
     const vad = new LocalVad(this.deps.config.localVad ?? DEFAULT_LOCAL_VAD);
     this.noSpeechReason = undefined;
+    // 返事のあとの、呼びかけなしの続けての聞き取りか
+    const followUp = this.state === "SPEAKING";
     this.state = this.state === "SPEAKING" ? "FOLLOW_UP" : "LISTENING";
     this.sttSamples = 0;
     const stream = this.deps.stt.startStream();
@@ -260,16 +266,23 @@ export class VoiceSession {
           return;
         }
         this.noSpeechReason = spoke ? "empty" : "timeout";
+        if (followUp) {
+          // 続けての聞き取りで拾った声が言葉にならなかったときは、何も言わずに待機に戻る（013）
+          this.record("", "", "no_speech");
+          this.finishConversation();
+          return;
+        }
         await this.speakFixed(MESSAGES.noSpeech, "no_speech");
         return;
       }
-      await this.respond(text);
+      await this.respond(text, followUp);
     })();
   }
 
-  private async respond(userText: string): Promise<void> {
+  private async respond(userText: string, followUp = false): Promise<void> {
     const ac = new AbortController();
     this.turnAbort = ac;
+    this.endRequested = false;
     this.state = "THINKING";
     this.sink.stt(userText);
 
@@ -288,24 +301,34 @@ export class VoiceSession {
       householdId: this.householdId,
       now: this.deps.clock.now(),
       device: this.deps.device,
+      endConversation: () => {
+        this.endRequested = true;
+      },
     };
     const pending = this.deps.hooks?.pendingNotes?.(this.deviceId);
+    const notes = [...(pending?.notes ?? []), ...(followUp ? [FOLLOW_UP_NOTE] : [])];
     const spoken: string[] = [];
     try {
       const sentences = this.deps.orchestrator.respond({
         history: this.history,
         userText,
         ctx,
-        systemNotes: pending?.notes,
+        systemNotes: notes.length ? notes : undefined,
         signal: ac.signal,
       });
       await this.speakSentences(sentences, ac.signal, spoken);
-      pending?.consume();
       if (ac.signal.aborted) {
+        pending?.consume();
         this.record(userText, spoken.join(""), "aborted");
         return;
       }
-      this.record(userText, spoken.join(""), "ok");
+      if (spoken.length === 0 && this.endRequested) {
+        // 話しかけでない声として、黙って終えた（未通知のリマインダーの案内は、次の会話に残す）
+        this.record(userText, "", "ok", "ignored");
+      } else {
+        pending?.consume();
+        this.record(userText, spoken.join(""), "ok");
+      }
     } catch (err) {
       if (ac.signal.aborted) return;
       const kind = err instanceof ConversationError ? err.kind : "unknown";
@@ -408,7 +431,10 @@ export class VoiceSession {
   private afterSpeaking(ac: AbortController): void {
     if (ac.signal.aborted || this.closed) return;
     this.lastActiveAt = this.deps.clock.now().getTime();
-    if (this.deps.config.followUpSeconds > 0) {
+    if (this.endRequested) {
+      this.endRequested = false;
+      this.finishConversation();
+    } else if (this.deps.config.followUpSeconds > 0) {
       this.state = "SPEAKING";
       this.startListening(this.deps.config.followUpSeconds);
     } else {

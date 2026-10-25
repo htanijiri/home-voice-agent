@@ -18,6 +18,7 @@ import { attachWebSocket, WS_PATH } from "../transports/xiaozhi/websocket.js";
 import { type MqttUdpServer, startMqttUdp } from "../transports/xiaozhi/mqtt-udp.js";
 import { KvRepo } from "../db/kv-repo.js";
 import { volumeTool } from "../core/tools/volume.js";
+import { conversationTools } from "../core/tools/conversation.js";
 import { shoppingTools } from "../core/tools/shopping.js";
 import { ShoppingRepo } from "../db/shopping-repo.js";
 import { RemindersRepo } from "../db/reminders-repo.js";
@@ -89,7 +90,7 @@ export function createApp(deps: AppDeps): App {
   const shopping = new ShoppingRepo(db, (hh) => changes.notify(hh, "shopping"));
   const tools = deps.tools ?? new ToolRegistry();
   const reminders = new RemindersRepo(db, tz, (hh) => changes.notify(hh, "reminders"));
-  tools.register(volumeTool(), ...shoppingTools(shopping), ...reminderTools(reminders, tz));
+  tools.register(volumeTool(), ...shoppingTools(shopping), ...reminderTools(reminders, tz), ...conversationTools());
   let scheduler: ReminderScheduler | undefined;
   const volume = new VolumePolicy(config.volume, tz, kv);
 

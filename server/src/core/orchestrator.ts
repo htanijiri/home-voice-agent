@@ -121,6 +121,11 @@ export class Orchestrator {
           yield s;
         }
         if (!final) throw new ConversationError("llm", "llm stream ended without a message");
+        if (stopReason === "max_tokens" && final.content.some((b) => b.type === "tool_use")) {
+          // ツールの呼び出しの途中で打ち切られた（考える分で上限に達した）。結果のないツールの呼び出しを履歴に残すと、
+          // 次の問い合わせがエラーになるので、この回は失敗にする（013 の評価で起きた）
+          throw new ConversationError("llm", "max_tokens during tool use");
+        }
         if (stopReason === "refusal") {
           // 安全のために回答を断られた。履歴には残さない
           clearFirst();
@@ -155,7 +160,14 @@ export class Orchestrator {
           const r = (u.input as { reply?: unknown } | undefined)?.reply;
           return this.tools.acceptsReply(u.name) && typeof r === "string" ? r.trim() : "";
         });
-        if (replies.every(Boolean) && runs.every((r) => !r.isError && r.expected)) {
+        // 話しかけでない声を拾ったときなど、reply のない end_conversation だけなら、何も言わずに終える。
+        // 拾った声を次の発話の文脈にしないよう、履歴にも残さない（013）
+        if (toolUses.every((u) => this.tools.isTerminal(u.name)) && !replies.some(Boolean) && runs.every((r) => !r.isError)) {
+          return;
+        }
+        // end_conversation のような terminal のツールは reply がなくてもよい（ほかのツールの reply で答えて終える）
+        const replyReady = toolUses.every((u, i) => replies[i] || this.tools.isTerminal(u.name)) && replies.some(Boolean);
+        if (replyReady && runs.every((r) => !r.isError && r.expected)) {
           const replySplitter = new SentenceSplitter();
           const spoken: string[] = [];
           for (const s of [...replySplitter.push(replies.join("")), ...replySplitter.flush()]) {
