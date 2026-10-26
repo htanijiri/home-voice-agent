@@ -111,6 +111,54 @@ async function schedulerSetup() {
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
+describe("確認画面から読み上げる（014）", () => {
+  it("待機中ならすぐ notify を送る。つながっていなければ offline", async () => {
+    const s = await schedulerSetup();
+    expect(await s.app.announcer.announce("もうすぐ帰るよ")).toBe("offline");
+    const dev = await s.connect();
+    expect(await s.app.announcer.announce("もうすぐ帰るよ")).toBe("sent");
+    await settle();
+    expect(s.notifies(dev)).toHaveLength(1);
+    expect(s.notifies(dev)[0]!.subtitles[0].text).toBe("もうすぐ帰るよ");
+    expect(s.tts.texts).toContain("もうすぐ帰るよ");
+  });
+
+  it("会話中なら待ち、待機に戻ったら送る。2 分を過ぎたら捨てる", async () => {
+    const s = await schedulerSetup();
+    const dev = await s.connect();
+    await dev.openAudio();
+    await settle();
+    expect(await s.app.announcer.announce("お風呂を沸かしておいて")).toBe("queued");
+    await s.app.announcer.flush();
+    expect(s.notifies(dev)).toHaveLength(0);
+    dev.goodbye();
+    await settle();
+    await s.app.announcer.flush();
+    await settle();
+    expect(s.notifies(dev).map((m) => m.subtitles[0].text)).toEqual(["お風呂を沸かしておいて"]);
+
+    await dev.openAudio();
+    await settle();
+    expect(await s.app.announcer.announce("先に寝るね")).toBe("queued");
+    s.clock.advance(121_000);
+    await s.app.announcer.flush();
+    dev.goodbye();
+    await settle();
+    await s.app.announcer.flush();
+    await settle();
+    expect(s.notifies(dev)).toHaveLength(1);
+  });
+
+  it("夜間は、送る前に夜の音量に切り替える", async () => {
+    const s = await schedulerSetup();
+    const dev = await s.connect();
+    s.clock.advance(12.5 * 3_600_000); // 22:30
+    expect(await s.app.announcer.announce("おやすみ")).toBe("sent");
+    await settle();
+    expect(dev.volume).toBe(s.config.volume.night);
+  });
+});
+
 describe("読み上げる文（010）", () => {
   const row = (title: string) => ({ title }) as Parameters<typeof notifyText>[0][number];
   it("登録した内容だけを読み、句点を重ねない", () => {
@@ -229,11 +277,9 @@ describe("スケジューラー", () => {
     s.add("ゴミ出し", "2026-10-20T10:01");
     // 再起動を模す：同じデータベースで新しいスケジューラーを2つ作って、両方で tick しても二重にならない
     const { ReminderScheduler } = await import("../src/app/reminder-scheduler.js");
-    const { NotifyAudioStore } = await import("../src/app/notify-audio.js");
     const fresh = new RemindersRepo(s.db, TZ);
-    const a = new ReminderScheduler(fresh, s.app.hub, s.tts, new NotifyAudioStore(), s.clock, {
+    const a = new ReminderScheduler(fresh, s.app.hub, s.app.announcer, s.clock, {
       tz: TZ,
-      publicBaseUrl: () => s.base,
       retryMinutes: 5,
       maxLateMinutes: 120,
     });

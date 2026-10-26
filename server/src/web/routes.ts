@@ -16,6 +16,8 @@ import { renderLoginPage, renderAppPage } from "./page.js";
 const COOKIE = "hva_session";
 /** 変更の通知（SSE）のハートビートの間隔。Fly のプロキシのアイドル切断より短くする */
 export const EVENTS_HEARTBEAT_MS = 25_000;
+/** 確認画面から読み上げる文章の上限（014） */
+export const ANNOUNCE_MAX_CHARS = 100;
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -27,7 +29,7 @@ class BadRequest extends UserError {}
 
 export async function registerWeb(
   http: FastifyInstance,
-  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage" | "changes">,
+  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage" | "changes" | "announcer">,
   auth: WebAuth,
   config: AppConfig,
   clock: Clock,
@@ -153,6 +155,14 @@ export async function registerWeb(
     scope.post("/shopping/:id/bought", async (req) => app.shopping.setStatus(hh, idOf(req), "bought", clock.now()));
     scope.post("/shopping/:id/restore", async (req) => app.shopping.restore(hh, idOf(req), clock.now()));
     scope.delete("/shopping/:id", async (req) => app.shopping.setStatus(hh, idOf(req), "deleted", clock.now()));
+
+    // 確認画面から読み上げる（014）。文章はログにもデータベースにも残さない
+    scope.post<{ Body: { text?: string } }>("/announce", async (req) => {
+      const text = String(req.body?.text ?? "").trim();
+      if (!text) throw new BadRequest("読み上げる文章を入れてください");
+      if ([...text].length > ANNOUNCE_MAX_CHARS) throw new BadRequest(`${ANNOUNCE_MAX_CHARS} 文字までです`);
+      return { status: await app.announcer.announce(text) };
+    });
 
     // リマインダー（画面では日付・時刻・繰り返しを直接指定する）
     const view = (r: ReturnType<typeof app.reminders.active>[number]) => ({

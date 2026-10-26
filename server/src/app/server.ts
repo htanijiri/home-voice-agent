@@ -24,6 +24,7 @@ import { ShoppingRepo } from "../db/shopping-repo.js";
 import { RemindersRepo } from "../db/reminders-repo.js";
 import { reminderTools } from "../core/tools/reminders.js";
 import { NotifyAudioStore } from "./notify-audio.js";
+import { Announcer } from "./announcer.js";
 import { ReminderScheduler } from "./reminder-scheduler.js";
 import { DeviceHub } from "./hub.js";
 import { FirmwareStore } from "./firmware.js";
@@ -62,6 +63,8 @@ export interface App {
   /** 買い物リスト・リマインダーの変更の通知 */
   changes: ChangeFeed;
   scheduler: ReminderScheduler;
+  /** チャイムのあとの読み上げ（リマインダー・確認画面から） */
+  announcer: Announcer;
   jobs: JobRunner;
   volume: VolumePolicy;
   listen(port?: number, host?: string): Promise<number>;
@@ -173,15 +176,17 @@ export function createApp(deps: AppDeps): App {
   });
 
   const notifyAudio = new NotifyAudioStore();
-  scheduler = new ReminderScheduler(reminders, hub, deps.tts, notifyAudio, clock, {
-    tz,
+  const announcer = new Announcer(hub, deps.tts, notifyAudio, clock, {
     publicBaseUrl: () => config.server.publicBaseUrl,
-    retryMinutes: 5,
-    maxLateMinutes: 120,
     beforeNotify: async (deviceId) => {
       const mcp = hub.getMcp(deviceId);
       if (mcp) await volume.apply(deviceId, mcp, clock.now());
     },
+  });
+  scheduler = new ReminderScheduler(reminders, hub, announcer, clock, {
+    tz,
+    retryMinutes: 5,
+    maxLateMinutes: 120,
   });
 
   const jobs: Job[] = [
@@ -217,7 +222,7 @@ export function createApp(deps: AppDeps): App {
     ? new WebAuth(db, deps.oidc, () => `${config.server.publicBaseUrl}/auth/callback`)
     : undefined;
   if (webAuth) {
-    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage, changes }, webAuth, config, clock));
+    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage, changes, announcer }, webAuth, config, clock));
     jobs.push({ name: "web-sessions", at: "04:00", run: (now) => webAuth.purge(now) });
   } else {
     http.get("/", async (_req, reply) =>
@@ -250,6 +255,7 @@ export function createApp(deps: AppDeps): App {
     reminders,
     changes,
     scheduler,
+    announcer,
     jobs: jobRunner,
     volume,
     async listen(port = config.server.httpPort, host = "0.0.0.0") {
@@ -268,6 +274,7 @@ export function createApp(deps: AppDeps): App {
     async close() {
       jobRunner.stop();
       scheduler!.stop();
+      announcer.stop();
       hub.close();
       await app.mqtt?.close();
       // 端末との WebSocket の接続を切ってから閉じる（切らないと close が終わらない）

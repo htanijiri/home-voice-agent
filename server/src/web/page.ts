@@ -31,7 +31,8 @@ ul.list li:last-child { border-bottom:0; }
 .sub { color:var(--muted); font-size:13px; }
 .empty { color:var(--muted); padding:8px 0; }
 form.row { display:flex; gap:8px; flex-wrap:wrap; }
-input, select { font-size:16px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); min-width:0; }
+textarea { width:100%; resize:vertical; font-family:inherit; }
+input, select, textarea { font-size:16px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); min-width:0; }
 input.grow { flex:1 1 140px; }
 button.btn { font-size:15px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -66,6 +67,7 @@ export function renderAppPage(email: string, csrf: string): string {
 <header><h1>アイリス</h1><nav role="tablist">
 <button role="tab" data-tab="shopping" aria-selected="true">買い物</button>
 <button role="tab" data-tab="reminders" aria-selected="false">リマインダー</button>
+<button role="tab" data-tab="announce" aria-selected="false">話す</button>
 <button role="tab" data-tab="more" aria-selected="false">その他</button>
 </nav></header>
 <main>
@@ -95,6 +97,13 @@ export function renderAppPage(email: string, csrf: string): string {
   </form>
   <h2>お知らせできなかったもの（7日間）</h2>
   <div class="card"><ul class="list" id="rem-missed"></ul></div>
+</section>
+<section id="tab-announce" hidden>
+  <form class="card" id="announce-form">
+    <label class="field"><span>アイリスに読み上げてもらう文章（チャイムのあとに読み上げます）</span><textarea name="text" rows="3" maxlength="100" required placeholder="例：もうすぐ帰るよ"></textarea></label>
+    <div class="row" style="display:flex;gap:8px;align-items:center"><button class="btn primary" id="announce-send">読み上げる</button><span class="sub" id="announce-count">あと 100 文字</span></div>
+  </form>
+  <p class="sub">アイリスが会話中のときは、会話が終わってから読み上げます（2分まで待ちます）。送った文章は保存しません。</p>
 </section>
 <section id="tab-more" hidden>
   <h2>端末</h2>
@@ -223,7 +232,21 @@ async function loadMore() {
 $('#dev-approve').addEventListener('submit', async (e) => { e.preventDefault(); await api('POST', '/devices/approve', { code: e.target.code.value }); toast('承認しました'); e.target.reset(); loadMore(); });
 $('#conv-delete').addEventListener('click', async () => { if (confirm('会話の記録をすべて消しますか？元に戻せません。')) { await api('DELETE', '/conversations'); toast('消しました'); loadMore(); } });
 $('#logout').addEventListener('click', async () => { await fetch('/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': CSRF } }).catch(() => {}); location.href = '/login'; });
-function load(tab) { ({ shopping: loadShopping, reminders: loadReminders, more: loadMore })[tab]().catch(() => {}); }
+// 確認画面から読み上げる（014）
+const announceForm = $('#announce-form');
+const announceCount = () => { $('#announce-count').textContent = 'あと ' + (100 - [...announceForm.text.value].length) + ' 文字'; };
+announceForm.text.addEventListener('input', announceCount);
+announceForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('#announce-send'); btn.disabled = true;
+  try {
+    const r = await api('POST', '/announce', { text: announceForm.text.value });
+    const msg = { sent: '読み上げました', queued: '会話が終わったら読み上げます', offline: 'アイリスがつながっていません', busy: '待っている読み上げが多すぎます。少ししてから送ってください' }[r.status] || '送りました';
+    toast(msg);
+    if (r.status === 'sent' || r.status === 'queued') { announceForm.reset(); announceCount(); }
+  } catch {} finally { btn.disabled = false; }
+});
+function load(tab) { ({ shopping: loadShopping, reminders: loadReminders, announce: async () => {}, more: loadMore })[tab]().catch(() => {}); }
 load('shopping');
 // 声や別のスマホでの変更を、サーバーからの知らせ（SSE）で受けて、表示中のタブを読み直す
 const currentTab = () => document.querySelector('nav button[aria-selected=true]').dataset.tab;

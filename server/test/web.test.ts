@@ -280,4 +280,14 @@ describe("変更の通知（008）", () => {
     for (let i = 0; i < 50 && t.app.changes.size > 0; i++) await new Promise((res) => setTimeout(res, 20));
     expect(t.app.changes.size).toBe(0);
   });
+
+  it("確認画面から読み上げる：文章を確かめ、端末がなければ offline（014）", async () => {
+    const t = await setup();
+    const s = await t.session();
+    expect((await s.call("POST", "/announce", { text: "" })).status).toBe(400);
+    expect((await s.call("POST", "/announce", { text: "あ".repeat(101) })).status).toBe(400);
+    expect(await (await s.call("POST", "/announce", { text: "もうすぐ帰るよ" })).json()).toEqual({ status: "offline" });
+    expect((await s.call("POST", "/announce", { text: "x" }, { "x-csrf-token": "wrong" })).status).toBe(403);
+  });
 });
+

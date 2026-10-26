@@ -5,20 +5,17 @@
 //   - 読み上げるのは、登録した内容だけ（「〇〇の時間です」は付けない）。
 //     それより古いものは missed にして、次の会話の最初に伝える
 //   - 同じ回を二重に送らないよう、通知の記録（reminder_deliveries）は1回の予定につき1行にする
-import type { Clock, TextToSpeech } from "../core/ports.js";
+import type { Clock } from "../core/ports.js";
 import { spokenDateTime } from "../core/reminders/speech.js";
 import type { DeliveryRow, RemindersRepo } from "../db/reminders-repo.js";
 import { errorFields, log } from "../log.js";
+import type { Announcer } from "./announcer.js";
 import type { DeviceHub } from "./hub.js";
-import type { NotifyAudioStore } from "./notify-audio.js";
 
 export interface ReminderSchedulerConfig {
   tz: string;
-  publicBaseUrl: () => string;
   retryMinutes: number;
   maxLateMinutes: number;
-  /** 通知を送る前に呼ぶ（夜間の音量など） */
-  beforeNotify?: (deviceId: string) => Promise<void>;
 }
 
 const LATE_THRESHOLD_MS = 60_000;
@@ -36,9 +33,8 @@ export class ReminderScheduler {
 
   constructor(
     private readonly repo: RemindersRepo,
-    private readonly hub: DeviceHub,
-    private readonly tts: TextToSpeech,
-    private readonly audio: NotifyAudioStore,
+    hub: DeviceHub,
+    private readonly announcer: Announcer,
     private readonly clock: Clock,
     private readonly cfg: ReminderSchedulerConfig,
   ) {
@@ -65,11 +61,6 @@ export class ReminderScheduler {
     if (sent.length) this.repo.setState(sent.map((d) => d.id), "acknowledged", now);
   }
 
-  /** 通知できる端末（MQTT でつながっていて、会話中でない） */
-  private targets(): string[] {
-    return this.hub.onlineDevices().filter((id) => this.hub.getLink(id)?.kind === "mqtt");
-  }
-
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -92,9 +83,8 @@ export class ReminderScheduler {
       if (finished.length) this.repo.setState(finished.map((d) => d.id), "done");
       const retry = sent.filter((d) => d.attempts === 1 && now.getTime() - Date.parse(d.sent_at!) >= retryMs);
 
-      const devices = this.targets();
-      if (devices.length === 0) return;
-      const idle = devices.filter((id) => !this.hub.isBusy(id));
+      if (this.announcer.targets().length === 0) return;
+      const idle = this.announcer.idleTargets();
       if (idle.length === 0) {
         // 会話中の人がいる＝近くにいるので、2回目は送らずに届いたものとする
         if (retry.length) this.repo.setState(retry.map((d) => d.id), "acknowledged", now);
@@ -115,27 +105,9 @@ export class ReminderScheduler {
   }
 
   private async send(deviceIds: string[], rows: DeliveryRow[], text: string): Promise<void> {
-    const now = this.clock.now();
     // 先に送信済みにして、二重に送らないようにする
-    this.repo.markSent(rows.map((r) => r.id), now);
-    let url: string | undefined;
-    try {
-      const { ogg } = await this.tts.synthesizeOggOpus(text);
-      url = `${this.cfg.publicBaseUrl()}/notify/audio/${this.audio.put(ogg)}.ogg`;
-    } catch (err) {
-      log.warn("notify tts failed", errorFields(err));
-    }
-    for (const id of deviceIds) {
-      await this.cfg.beforeNotify?.(id).catch(() => undefined);
-      const link = this.hub.getLink(id);
-      if (!link) continue;
-      if (url) {
-        link.sendJson({ type: "notify", audio_url: url, subtitles: [{ start_ms: 0, text }] });
-      } else {
-        // 音声が作れないときは、画面の表示と通知音で知らせる
-        link.sendJson({ type: "alert", status: "リマインダー", message: text, emotion: "neutral" });
-      }
-    }
+    this.repo.markSent(rows.map((r) => r.id), this.clock.now());
+    await this.announcer.send(deviceIds, text, "リマインダー");
     log.info("reminder notified", { count: rows.length, attempt: (rows[0]?.attempts ?? 0) + 1 });
   }
 
