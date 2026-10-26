@@ -124,6 +124,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE turns ADD COLUMN ms_voice_end_to_audio INTEGER;
   `,
+  // 9: リマインダーをもう1回読み上げる時刻（015）
+  `
+  ALTER TABLE reminder_deliveries ADD COLUMN retry_at TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

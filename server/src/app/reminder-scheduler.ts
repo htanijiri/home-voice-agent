@@ -1,5 +1,5 @@
 // リマインダーのスケジューラー。保存された次の通知時刻を見て、時刻が来たら端末に notify を送る。
-//   - 反応（呼びかけ・ボタン・会話の開始）が retryMinutes 以内になければ、もう1回だけ送る
+//   - 読み上げのあと retryWaitSeconds（約 10 秒）のうちに反応（呼びかけ・ボタン・会話の開始）がなければ、すぐもう1回だけ送る（015）
 //   - 会話中なら、会話が終わってから送る
 //   - 端末がつながっていなければ待ち、遅れが maxLateMinutes 以内なら「遅れてお知らせします」を付けて送る。
 //   - 読み上げるのは、登録した内容だけ（「〇〇の時間です」は付けない）。
@@ -14,11 +14,20 @@ import type { DeviceHub } from "./hub.js";
 
 export interface ReminderSchedulerConfig {
   tz: string;
-  retryMinutes: number;
+  /** 読み上げが終わってから、反応を待つ秒数（015） */
+  retryWaitSeconds: number;
   maxLateMinutes: number;
 }
 
 const LATE_THRESHOLD_MS = 60_000;
+
+/**
+ * notify を送ってから読み上げが終わるまでの見込み（015）。端末からは終わりの知らせが来ないので、
+ * 音声を取りに来る時間（TLS の接続を含め約 3.5 秒）＋チャイム（約 1.5 秒）＋文字数 × 0.17 秒で見積もる
+ */
+export function notifyPlaybackMs(text: string): number {
+  return 3500 + 1500 + [...text].length * 170;
+}
 
 /** 読み上げる文。登録した内容をそのまま読み、文の終わりに句点がなければ足す */
 export function notifyText(rows: DeliveryRow[], late: boolean): string {
@@ -45,7 +54,7 @@ export class ReminderScheduler {
     });
   }
 
-  start(intervalMs = 10_000) {
+  start(intervalMs = 2_000) {
     void this.tick();
     this.timer = setInterval(() => void this.tick(), intervalMs);
     this.timer.unref();
@@ -77,11 +86,12 @@ export class ReminderScheduler {
       const sendable = pending.filter((d) => !tooLate.includes(d));
 
       // 3. 1回目を送ったが反応がないものは、もう1回（2回目のあとは done）
-      const retryMs = this.cfg.retryMinutes * 60_000;
       const sent = this.repo.deliveries(["sent"]);
-      const finished = sent.filter((d) => d.attempts >= 2 && now.getTime() - Date.parse(d.sent_at!) >= retryMs);
+      // retry_at のない古い行（015 より前に送ったもの）は、送ってから 5 分とする
+      const due = (d: DeliveryRow) => now.getTime() >= (d.retry_at ? Date.parse(d.retry_at) : Date.parse(d.sent_at!) + 300_000);
+      const finished = sent.filter((d) => d.attempts >= 2 && due(d));
       if (finished.length) this.repo.setState(finished.map((d) => d.id), "done");
-      const retry = sent.filter((d) => d.attempts === 1 && now.getTime() - Date.parse(d.sent_at!) >= retryMs);
+      const retry = sent.filter((d) => d.attempts === 1 && due(d));
 
       if (this.announcer.targets().length === 0) return;
       const idle = this.announcer.idleTargets();
@@ -106,7 +116,9 @@ export class ReminderScheduler {
 
   private async send(deviceIds: string[], rows: DeliveryRow[], text: string): Promise<void> {
     // 先に送信済みにして、二重に送らないようにする
-    this.repo.markSent(rows.map((r) => r.id), this.clock.now());
+    const now = this.clock.now();
+    const retryAt = new Date(now.getTime() + notifyPlaybackMs(text) + this.cfg.retryWaitSeconds * 1000);
+    this.repo.markSent(rows.map((r) => r.id), now, retryAt);
     await this.announcer.send(deviceIds, text, "リマインダー");
     log.info("reminder notified", { count: rows.length, attempt: (rows[0]?.attempts ?? 0) + 1 });
   }

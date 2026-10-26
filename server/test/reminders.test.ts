@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ToolRegistry } from "../src/core/tools/registry.js";
-import { notifyText } from "../src/app/reminder-scheduler.js";
+import { notifyPlaybackMs, notifyText } from "../src/app/reminder-scheduler.js";
 import { reminderTools } from "../src/core/tools/reminders.js";
 import { openDb } from "../src/db/db.js";
 import { RemindersRepo } from "../src/db/reminders-repo.js";
@@ -189,19 +189,28 @@ describe("スケジューラー", () => {
     expect((await fetch(new URL(url.pathname, s.base))).status).toBe(404);
   });
 
-  it("5分以内に反応がなければ1回だけ再送する。2回目のあとは送らない", async () => {
+  it("読み上げの見込み＋10 秒のうちに反応がなければ、すぐ1回だけ再送する。2回目のあとは送らない（015）", async () => {
     const s = await schedulerSetup();
     const dev = await s.connect();
     s.add("ゴミ出し", "2026-10-20T10:00");
     await s.app.scheduler.tick();
     await settle();
-    s.clock.advance(5 * 60_000);
+    // 「ゴミ出し。」（5 文字）の見込み：3.5 + 1.5 + 5 × 0.17 = 5.85 秒。それに 10 秒を足した 15.85 秒より前には送らない
+    expect(notifyPlaybackMs("ゴミ出し。")).toBe(5850);
+    s.clock.advance(15_000);
     await s.app.scheduler.tick();
     await settle();
+    expect(s.notifies(dev)).toHaveLength(1);
+    s.clock.advance(1_000);
+    await s.app.scheduler.tick();
+    await settle();
+    expect(s.notifies(dev)).toHaveLength(2);
+    // 2回目のあとは、時間がたっても送らない
     s.clock.advance(10 * 60_000);
     await s.app.scheduler.tick();
     await settle();
     expect(s.notifies(dev)).toHaveLength(2);
+    expect(s.app.reminders.deliveries(["done"])).toHaveLength(1);
   });
 
   it("反応（会話の開始）があれば再送しない", async () => {
@@ -280,7 +289,7 @@ describe("スケジューラー", () => {
     const fresh = new RemindersRepo(s.db, TZ);
     const a = new ReminderScheduler(fresh, s.app.hub, s.app.announcer, s.clock, {
       tz: TZ,
-      retryMinutes: 5,
+      retryWaitSeconds: 10,
       maxLateMinutes: 120,
     });
     cleanup.push(() => a.stop());

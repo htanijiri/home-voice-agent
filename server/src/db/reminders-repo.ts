@@ -28,6 +28,8 @@ export interface DeliveryRow {
   attempts: number;
   sent_at: string | null;
   ack_at: string | null;
+  /** もう1回読み上げる時刻（2回目のあとは、終わりにする時刻）（015） */
+  retry_at: string | null;
 }
 
 const toReminder = (r: ReminderRow): Reminder => ({ ...r, schedule: JSON.parse(r.schedule) as Schedule });
@@ -136,9 +138,11 @@ export class RemindersRepo {
       .all(...states) as DeliveryRow[];
   }
 
-  markSent(ids: number[], now: Date): void {
-    const st = this.db.prepare("UPDATE reminder_deliveries SET state = 'sent', attempts = attempts + 1, sent_at = ? WHERE id = ?");
-    this.db.transaction(() => ids.forEach((id) => st.run(now.toISOString(), id)))();
+  markSent(ids: number[], now: Date, retryAt: Date): void {
+    const st = this.db.prepare(
+      "UPDATE reminder_deliveries SET state = 'sent', attempts = attempts + 1, sent_at = ?, retry_at = ? WHERE id = ?",
+    );
+    this.db.transaction(() => ids.forEach((id) => st.run(now.toISOString(), retryAt.toISOString(), id)))();
   }
 
   setState(ids: number[], state: DeliveryState, now?: Date): void {

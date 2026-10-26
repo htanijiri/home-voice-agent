@@ -49,7 +49,7 @@ describe("変更の通知", () => {
     const due = reminders.due(new Date("2026-10-22T00:00:00Z"));
     expect(due).toHaveLength(1);
     const d = reminders.takeDue(due[0]!);
-    reminders.markSent([d!.id], now);
+    reminders.markSent([d!.id], now, now);
     reminders.active("home");
     reminders.delete("home", r.id, now);
     expect(got).toEqual(Array(6).fill(["home", "reminders"]));

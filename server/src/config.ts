@@ -41,6 +41,8 @@ export interface AppConfig {
   };
   limits: { dailyTurns: number };
   volume: { day: number; night: number; nightStart: string; nightEnd: string };
+  /** リマインダー（015）。なければ既定値 */
+  reminders?: { retryWaitSeconds?: number };
   retention: { conversationDays: number };
   household: { id: string; timezone: string };
   pricing: import("./report/cost.js").Pricing;

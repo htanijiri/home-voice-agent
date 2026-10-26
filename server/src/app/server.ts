@@ -185,7 +185,7 @@ export function createApp(deps: AppDeps): App {
   });
   scheduler = new ReminderScheduler(reminders, hub, announcer, clock, {
     tz,
-    retryMinutes: 5,
+    retryWaitSeconds: config.reminders?.retryWaitSeconds ?? 10,
     maxLateMinutes: 120,
   });
 

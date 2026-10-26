@@ -63,6 +63,10 @@ localVadEndMs = 800
 # 1日（日本時間）の会話の回数の上限
 dailyTurns = 200
 
+[reminders]
+# リマインダーの読み上げが終わってから、反応（呼びかけ・ボタン）を待つ秒数。反応がなければ、すぐもう1回だけ読み上げる
+retryWaitSeconds = 10
+
 [volume]
 day = 65
 night = 50
