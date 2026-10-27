@@ -334,9 +334,9 @@ describe("家族への連絡（016）", () => {
     expect(r4.isError).toBe(false);
   });
 
-  it("用件が空・長すぎるときは送らない", async () => {
+  it("用件が空・長すぎるときは送らない（空なら聞き返し。017）", async () => {
     const t = await setup();
-    expect((await t.app.tools.run("send_family_message", { text: " " }, ctx)).isError).toBe(true);
+    expect((await t.app.tools.run("send_family_message", { text: " " }, ctx)).isError).toBe(false);
     expect((await t.app.tools.run("send_family_message", { text: "あ".repeat(101) }, ctx)).isError).toBe(true);
     expect(t.app.messages.list("home")).toHaveLength(0);
   });

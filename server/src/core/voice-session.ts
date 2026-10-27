@@ -35,7 +35,20 @@ export interface VoiceSessionConfig {
   maxHistoryTurns: number;
   /** サーバーでの話し始め・話し終わりの判定（省略時は既定値） */
   localVad?: LocalVadConfig;
+  /** 「ゆっくり聞く」聞き取り（017：連絡の用件を聞き返したあと）。省略時は既定値 */
+  patient?: PatientListenConfig;
 }
+
+export interface PatientListenConfig {
+  /** 話し始めを待つ秒数 */
+  startSeconds: number;
+  /** 話し始めのあと、この長さ（ミリ秒）静かだったら話し終わり */
+  endMs: number;
+  /** 1回の発話の上限の秒数 */
+  maxUtteranceSeconds: number;
+}
+
+export const DEFAULT_PATIENT_LISTEN: PatientListenConfig = { startSeconds: 15, endMs: 2000, maxUtteranceSeconds: 30 };
 
 export interface TurnTimings {
   listenStartAt?: number;
@@ -77,6 +90,10 @@ export const MESSAGES = {
 const SAMPLE_RATE_IN = 16000;
 /** 続けての聞き取りの発話に添える補足（どう扱うかはシステムプロンプトに書く） */
 export const FOLLOW_UP_NOTE = "この発話は、返事のあとに「アイリス」の呼びかけなしで聞き取ったもの（続けての聞き取り）。";
+/** 連絡の用件を聞き返したあとの発話に添える補足（017） */
+export const PATIENT_NOTE = "この発話は、家族への連絡の用件を聞き返したあとに聞き取ったもの（連絡の用件の答え）。";
+/** ゆっくり聞くとき、Google の話し終わりで閉じるのを、サーバーの判定よりこれだけ遅らせる */
+const PATIENT_STT_END_MARGIN_SECONDS = 1;
 /** 待ち時間切れで STT を閉じたあと、確定を待つ上限 */
 const FINAL_WAIT_MS = 3000;
 /** 待ち時間が切れたとき、ちょうど声がし始めていたら待ち直す間隔 */
@@ -99,6 +116,8 @@ export class VoiceSession {
   private noSpeechReason?: ListenSummary["noSpeechReason"];
   /** この回の返事のあと、続けての聞き取りをせずに待機に戻る（013） */
   private endRequested = false;
+  /** この回の返事のあと、次の聞き取りを「ゆっくり聞く」にする（017） */
+  private patientRequested = false;
   private closed = false;
 
   constructor(
@@ -168,18 +187,26 @@ export class VoiceSession {
     this.onDisconnect();
   }
 
-  private startListening(timeoutSeconds: number): void {
+  /** patient：連絡の用件を聞き返したあとの「ゆっくり聞く」聞き取り（017） */
+  private startListening(timeoutSeconds: number, patient = false): void {
     this.stopStt();
     this.timings = { listenStartAt: Date.now() };
     const listen = new ListenStats();
     this.listen = listen;
-    const vad = new LocalVad(this.deps.config.localVad ?? DEFAULT_LOCAL_VAD);
+    const vadCfg = this.deps.config.localVad ?? DEFAULT_LOCAL_VAD;
+    const patientCfg = this.deps.config.patient ?? DEFAULT_PATIENT_LISTEN;
+    const vad = new LocalVad(patient ? { ...vadCfg, endMs: patientCfg.endMs } : vadCfg);
+    const maxUtteranceSeconds = patient ? patientCfg.maxUtteranceSeconds : this.deps.config.maxUtteranceSeconds;
+    if (patient) log.info("patient listen", { deviceId: this.deviceId, startSeconds: timeoutSeconds, endMs: patientCfg.endMs });
     this.noSpeechReason = undefined;
     // 返事のあとの、呼びかけなしの続けての聞き取りか
     const followUp = this.state === "SPEAKING";
     this.state = this.state === "SPEAKING" ? "FOLLOW_UP" : "LISTENING";
     this.sttSamples = 0;
-    const stream = this.deps.stt.startStream();
+    // ゆっくり聞くときは、Google が途中の無言で閉じないよう、サーバーの判定より長く待たせる
+    const stream = this.deps.stt.startStream(
+      patient ? { speechEndSeconds: patientCfg.endMs / 1000 + PATIENT_STT_END_MARGIN_SECONDS } : undefined,
+    );
     this.stt = stream;
     let spoke = false;
     let timedOut = false;
@@ -188,7 +215,7 @@ export class VoiceSession {
       spoke = true;
       if (this.state === "FOLLOW_UP") this.state = "LISTENING";
       clearTimeout(this.sttTimer);
-      this.utteranceTimer = setTimeout(() => stream.end(), this.deps.config.maxUtteranceSeconds * 1000);
+      this.utteranceTimer = setTimeout(() => stream.end(), maxUtteranceSeconds * 1000);
     };
     // 話し始めは、STT の合図とサーバーでの判定の早いほうで決める（STT の合図は 0.6〜1.4 秒遅れるため）
     this.onVad = (pcm) => {
@@ -237,6 +264,8 @@ export class VoiceSession {
             listen.speechStart();
             if (!timedOut) startSpeech();
           } else if (ev.type === "speech_end") {
+            // ゆっくり聞くときは、Google の合図では止めず、サーバーの判定だけで止める（017）
+            if (patient) continue;
             this.timings.speechEndAt ??= Date.now();
             stream.end();
           } else if (ev.type === "final") {
@@ -275,14 +304,15 @@ export class VoiceSession {
         await this.speakFixed(MESSAGES.noSpeech, "no_speech");
         return;
       }
-      await this.respond(text, followUp);
+      await this.respond(text, followUp, patient);
     })();
   }
 
-  private async respond(userText: string, followUp = false): Promise<void> {
+  private async respond(userText: string, followUp = false, patient = false): Promise<void> {
     const ac = new AbortController();
     this.turnAbort = ac;
     this.endRequested = false;
+    this.patientRequested = false;
     this.state = "THINKING";
     this.sink.stt(userText);
 
@@ -304,9 +334,12 @@ export class VoiceSession {
       endConversation: () => {
         this.endRequested = true;
       },
+      listenPatiently: () => {
+        this.patientRequested = true;
+      },
     };
     const pending = this.deps.hooks?.pendingNotes?.(this.deviceId);
-    const notes = [...(pending?.notes ?? []), ...(followUp ? [FOLLOW_UP_NOTE] : [])];
+    const notes = [...(pending?.notes ?? []), ...(followUp ? [FOLLOW_UP_NOTE] : []), ...(patient ? [PATIENT_NOTE] : [])];
     const spoken: string[] = [];
     try {
       const sentences = this.deps.orchestrator.respond({
@@ -431,9 +464,15 @@ export class VoiceSession {
   private afterSpeaking(ac: AbortController): void {
     if (ac.signal.aborted || this.closed) return;
     this.lastActiveAt = this.deps.clock.now().getTime();
+    // 印は次の1回の聞き取りだけに効かせる（017）
+    const patient = this.patientRequested;
+    this.patientRequested = false;
     if (this.endRequested) {
       this.endRequested = false;
       this.finishConversation();
+    } else if (patient) {
+      this.state = "SPEAKING";
+      this.startListening((this.deps.config.patient ?? DEFAULT_PATIENT_LISTEN).startSeconds, true);
     } else if (this.deps.config.followUpSeconds > 0) {
       this.state = "SPEAKING";
       this.startListening(this.deps.config.followUpSeconds);

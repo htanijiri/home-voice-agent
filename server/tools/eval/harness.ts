@@ -12,7 +12,7 @@ import { reminderTools } from "../../src/core/tools/reminders.js";
 import { shoppingTools } from "../../src/core/tools/shopping.js";
 import { conversationTools } from "../../src/core/tools/conversation.js";
 import { messageTools } from "../../src/core/tools/messages.js";
-import { FOLLOW_UP_NOTE } from "../../src/core/voice-session.js";
+import { FOLLOW_UP_NOTE, PATIENT_NOTE } from "../../src/core/voice-session.js";
 import type { ChatMessage } from "../../src/core/types.js";
 import { openDb } from "../../src/db/db.js";
 import { RemindersRepo } from "../../src/db/reminders-repo.js";
@@ -48,21 +48,44 @@ export function newWorld(now = new Date("2026-10-20T10:00:00+09:00")) {
   );
   const history: ChatMessage[] = [];
   const firstSentenceMs: number[] = [];
-  const state = { ended: false };
-  /** followUp：返事のあとの、呼びかけなしの続けての聞き取りとして渡す（013） */
+  const state = { ended: false, patient: false };
+  /**
+   * followUp：返事のあとの、呼びかけなしの続けての聞き取りとして渡す（013）。
+   * 前の回で連絡の用件を聞き返していたら（017）、続けての聞き取りに PATIENT_NOTE も添える
+   */
   const say = async (text: string, opts: { followUp?: boolean } = {}) => {
     let out = "";
     const t0 = Date.now();
+    const patient = state.patient && opts.followUp === true;
     state.ended = false;
-    const ctx = { deviceId: "eval", householdId: "home", now, endConversation: () => (state.ended = true) };
-    const systemNotes = opts.followUp ? [FOLLOW_UP_NOTE] : undefined;
+    state.patient = false;
+    const ctx = {
+      deviceId: "eval",
+      householdId: "home",
+      now,
+      endConversation: () => (state.ended = true),
+      listenPatiently: () => (state.patient = true),
+    };
+    const notes = [...(opts.followUp ? [FOLLOW_UP_NOTE] : []), ...(patient ? [PATIENT_NOTE] : [])];
+    const systemNotes = notes.length ? notes : undefined;
     for await (const s of o.respond({ history, userText: text, ctx, systemNotes })) {
       if (!out) firstSentenceMs.push(Date.now() - t0);
       out += s;
     }
     return out;
   };
-  return { db, shopping, reminders, say, history, firstSentenceMs, sent, ended: () => state.ended };
+  return {
+    db,
+    shopping,
+    reminders,
+    say,
+    history,
+    firstSentenceMs,
+    sent,
+    ended: () => state.ended,
+    /** 直前の回で、次の聞き取りを「ゆっくり聞く」にしたか（017） */
+    patient: () => state.patient,
+  };
 }
 
 /** Claude Haiku に、条件を満たすかを判定させる（YES / NO） */

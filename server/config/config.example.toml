@@ -72,6 +72,12 @@ retryWaitSeconds = 10
 maxMessagesPerDay = 30
 # 1 件の用件の長さの上限（文字）
 messageMaxChars = 100
+# 「なんて伝える？」と用件を聞き返したあとだけ、ゆっくり聞く（017）。話し始めを待つ秒数
+patientStartSeconds = 15
+# 話している途中の無言を、何ミリ秒まで待つか（ふだんは conversation.localVadEndMs）
+patientEndMs = 2000
+# 1 回の発話の上限（秒）
+patientMaxUtteranceSeconds = 30
 
 [volume]
 day = 65

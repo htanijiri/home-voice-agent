@@ -1,6 +1,6 @@
 // Google Speech-to-Text v2 のストリーミング認識のアダプター。SDK を使うのはこのファイルだけ。
 import { protos, v2 } from "@google-cloud/speech";
-import type { SpeechToText, SttEvent, SttStream } from "../core/ports.js";
+import type { SpeechToText, SttEvent, SttStream, SttStreamOptions } from "../core/ports.js";
 import { log } from "../log.js";
 import { Queue } from "./queue.js";
 
@@ -21,7 +21,7 @@ export class GoogleStt implements SpeechToText {
     this.client = new v2.SpeechClient(apiEndpoint ? { apiEndpoint } : {});
   }
 
-  startStream(): SttStream {
+  startStream(opts: SttStreamOptions = {}): SttStream {
     const queue = new Queue<SttEvent>();
     const call = this.client._streamingRecognize();
     let finished = false;
@@ -30,7 +30,7 @@ export class GoogleStt implements SpeechToText {
       finished = true;
       queue.close();
     };
-    const endSec = this.cfg.speechEndSeconds ?? 0.8;
+    const endSec = opts.speechEndSeconds ?? this.cfg.speechEndSeconds ?? 0.8;
     call.write({
       recognizer: `projects/${this.cfg.projectId}/locations/${this.cfg.location}/recognizers/_`,
       streamingConfig: {

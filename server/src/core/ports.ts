@@ -19,8 +19,13 @@ export interface SttStream {
   events: AsyncIterable<SttEvent>;
 }
 
+export interface SttStreamOptions {
+  /** 話し終わりと判断して閉じるまでの無音の長さ（秒）。省略時はアダプターの設定 */
+  speechEndSeconds?: number;
+}
+
 export interface SpeechToText {
-  startStream(): SttStream;
+  startStream(opts?: SttStreamOptions): SttStream;
 }
 
 export interface TtsResult {

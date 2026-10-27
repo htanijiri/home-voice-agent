@@ -14,6 +14,8 @@ export interface ToolContext {
   device?: DeviceControl;
   /** 会話を終えて、続けての聞き取りをせずに待機に戻る（013） */
   endConversation?: () => void;
+  /** 次の1回の聞き取りを、話し始めと途中の無言を長めに待つ「ゆっくり聞く」にする（017） */
+  listenPatiently?: () => void;
 }
 
 export interface Tool {

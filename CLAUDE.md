@@ -67,6 +67,7 @@ home-voice-agent：M5Stack（AtomS3R＋Voice Pyramid）を、クラウドの LLM
 - `server/src/app/server.ts` の close で WebSocket の接続を切る処理：切らないとサーバーの停止が終わらない。
 - `server/src/transports/xiaozhi/link.ts` の、最初の音声を送る前の待ち（`startDelayMs`）と先頭の無音（`leadingSilenceMs`）：端末は「話し中」に切り替わるときに再生待ちの音声を捨てるので、なくすと返事の先頭の1〜2文字が欠ける。
 - `server/src/core/voice-session.ts` の、待ち時間切れで STT を abort せず end して確定を待つ処理と、`LocalVad`（サーバーでの話し始めの判定）：Google の話し始めの合図は 0.6〜1.4 秒遅れるので、なくすと、少し間を置いて話したときに声を捨てて「聞き取れませんでした」になる。
+- `server/src/core/voice-session.ts` の「ゆっくり聞く」ときに `startStream` へ渡す `speechEndSeconds`：Google は無音が続くとストリームを自分で閉じるので、渡さないと、サーバーの待ちを 2 秒にしても「えーっと」で切れる。サーバーの判定が話し始めに気づかない小さな声のときは、これが聞き取りの終わりになる。
 
 ## コマンド
 サーバー（`server/`）
@@ -77,6 +78,7 @@ npm run dev                 # 開発用に起動（.env と config/config.toml �
 npm run fake-device -- --audio test/fixtures/fuji.wav   # 偽の端末で、実際の外部サービスとの1往復
 npm run eval:no-hallucination && npm run eval:shopping && npm run eval:reminder   # 実際の Claude で評価
 npm run eval:late-speech     # 本物の Google STT で、間を置いて話し始めた声を聞き取れるか
+npm run eval:patient-speech  # 本物の Google STT で、連絡の用件の「えーっと……」のあとまで聞き取れるか
 npm run device:approve -- 123456   # 端末の承認（番号なしで一覧）
 npm run report -- --month 2026-11  # 待ち時間・回数・費用のレポート
 npm run web-preview         # 確認画面の見た目の確認（架空のデータ、http://localhost:8090/dev/login）

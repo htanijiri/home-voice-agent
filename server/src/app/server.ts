@@ -31,6 +31,7 @@ import { FirmwareStore } from "./firmware.js";
 import { type OidcConfig, WebAuth } from "../web/auth.js";
 import { registerWeb } from "../web/routes.js";
 import { DEFAULT_LOCAL_VAD } from "../core/local-vad.js";
+import { DEFAULT_PATIENT_LISTEN } from "../core/voice-session.js";
 import { ChangeFeed } from "./change-feed.js";
 import { JobRunner, type Job } from "./jobs.js";
 import { VolumePolicy } from "./volume-policy.js";
@@ -178,6 +179,11 @@ export function createApp(deps: AppDeps): App {
         minRms: config.conversation.localVadMinRms ?? DEFAULT_LOCAL_VAD.minRms,
         startMs: config.conversation.localVadStartMs ?? DEFAULT_LOCAL_VAD.startMs,
         endMs: config.conversation.localVadEndMs ?? DEFAULT_LOCAL_VAD.endMs,
+      },
+      patient: {
+        startSeconds: config.family?.patientStartSeconds ?? DEFAULT_PATIENT_LISTEN.startSeconds,
+        endMs: config.family?.patientEndMs ?? DEFAULT_PATIENT_LISTEN.endMs,
+        maxUtteranceSeconds: config.family?.patientMaxUtteranceSeconds ?? DEFAULT_PATIENT_LISTEN.maxUtteranceSeconds,
       },
     },
     hooks: {

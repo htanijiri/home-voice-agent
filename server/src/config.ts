@@ -44,7 +44,16 @@ export interface AppConfig {
   /** リマインダー（015）。なければ既定値 */
   reminders?: { retryWaitSeconds?: number };
   /** 家族への連絡（016）。なければ既定値 */
-  family?: { maxMessagesPerDay?: number; messageMaxChars?: number };
+  family?: {
+    maxMessagesPerDay?: number;
+    messageMaxChars?: number;
+    /** 用件を聞き返したあと、話し始めを待つ秒数（017） */
+    patientStartSeconds?: number;
+    /** 用件を聞き返したあと、話し終わりと判断する無音（ミリ秒） */
+    patientEndMs?: number;
+    /** 用件を聞き返したあとの、1回の発話の上限の秒数 */
+    patientMaxUtteranceSeconds?: number;
+  };
   retention: { conversationDays: number };
   household: { id: string; timezone: string };
   pricing: import("./report/cost.js").Pricing;

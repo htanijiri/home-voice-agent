@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "../src/core/orchestrator.js";
 import { conversationTools } from "../src/core/tools/conversation.js";
-import { ToolRegistry } from "../src/core/tools/registry.js";
+import { messageTools } from "../src/core/tools/messages.js";
+import { type Tool, ToolRegistry } from "../src/core/tools/registry.js";
 import { MESSAGES, type TurnRecord, VoiceSession, type VoiceSessionConfig } from "../src/core/voice-session.js";
 import { FakeClock, FakeLlm, FakeStreamingTts, FakeStt, FakeTts, RecordingSink, said } from "./fakes.js";
 
@@ -14,12 +15,19 @@ const baseCfg: VoiceSessionConfig = {
 };
 const frame = new Int16Array(960);
 
-function setup(opts: { llm: FakeLlm; stt: FakeStt; cfg?: Partial<VoiceSessionConfig>; limit?: string; tts?: FakeTts }) {
+function setup(opts: {
+  llm: FakeLlm;
+  stt: FakeStt;
+  cfg?: Partial<VoiceSessionConfig>;
+  limit?: string;
+  tts?: FakeTts;
+  tools?: Tool[];
+}) {
   const clock = new FakeClock();
   const tts = opts.tts ?? new FakeTts();
   const sink = new RecordingSink();
   const turns: TurnRecord[] = [];
-  const orchestrator = new Orchestrator(opts.llm, new ToolRegistry().register(...conversationTools()), "sys", () => "", clock, {
+  const orchestrator = new Orchestrator(opts.llm, new ToolRegistry().register(...conversationTools(), ...(opts.tools ?? [])), "sys", () => "", clock, {
     firstSentenceTimeoutMs: 15000,
     totalTimeoutMs: 60000,
     maxToolRounds: 3,
@@ -304,6 +312,107 @@ describe("VoiceSession", () => {
       expect(tts.texts).toEqual(["こんにちは。"]);
       expect(sink.events.at(-1)).toBe("end");
       expect(turns[1]).toMatchObject({ outcome: "no_speech", listen: { noSpeechReason: "empty" } });
+    });
+  });
+
+  describe("連絡の用件をゆっくり聞く（017）", () => {
+    const level = (rms: number) => new Int16Array(960).map((_, i) => (i % 2 ? rms : -rms));
+    const send = async (session: VoiceSession, rms: number, frames: number) => {
+      for (let i = 0; i < frames; i++) {
+        session.onAudio(level(rms));
+        await vi.advanceTimersByTimeAsync(60);
+      }
+    };
+    const messenger = () => {
+      const sent: { to?: string; text: string }[] = [];
+      return { sent, tools: messageTools({ send: async (_hh, to, text) => void sent.push({ to, text }) }, 100) };
+    };
+    const ask = { name: "send_family_message", input: { to: "パパ", reply: "なんて伝える？" } };
+
+    it("text なしで聞き返したら、2回目の LLM なしで読み上げ、次の聞き取りは途中の 2 秒の無言まで待って1つの用件にする", async () => {
+      const m = messenger();
+      const stt = new FakeStt([
+        said("パパに連絡して"),
+        // Google は「えっと」のあとの無言で話し終わりの合図を出すが、ゆっくり聞くときは止めない
+        { events: [{ type: "speech_end" }], afterEnd: [{ type: "final", text: "えっと、お迎え何時？" }] },
+        "silent",
+      ]);
+      const llm = new FakeLlm([
+        { toolUses: [ask] },
+        { toolUses: [{ name: "send_family_message", input: { to: "パパ", text: "えっと、お迎え何時？", reply: "パパに送ったよ。" } }] },
+      ]);
+      const { session, tts } = setup({ llm, stt, tools: m.tools });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      expect(tts.texts).toEqual(["なんて伝える？"]);
+      expect(llm.requests).toHaveLength(1);
+      expect(m.sent).toEqual([]);
+      // Google が途中の無言で閉じないよう、サーバーの判定（2 秒）より長く待たせる
+      expect(stt.opts[1]).toEqual({ speechEndSeconds: 3 });
+      // ふだんの 8 秒を過ぎても、話し始めを待つ
+      await send(session, 20, 170);
+      expect(stt.streams[1]!.ended).toBe(false);
+      expect(session.state).toBe("FOLLOW_UP");
+      // 「えっと」→ 1.5 秒の無言 → 続き。ふだんなら 0.8 秒で閉じるところ
+      await send(session, 100, 10);
+      await send(session, 20, 25);
+      expect(stt.streams[1]!.ended).toBe(false);
+      await send(session, 100, 15);
+      await send(session, 20, 35); // 2 秒静かになったら閉じる
+      await flush(40);
+      expect(stt.streams[1]!.ended).toBe(true);
+      expect(m.sent).toEqual([{ to: "パパ", text: "えっと、お迎え何時？" }]);
+      expect(tts.texts).toEqual(["なんて伝える？", "パパに送ったよ。"]);
+      expect(JSON.stringify(llm.requests[1]!.messages.at(-1))).toContain("連絡の用件を聞き返したあと");
+      // 印は1回だけ。そのあとの聞き取りは今までどおり
+      expect(stt.opts[2]).toBeUndefined();
+    });
+
+    it("話し始めを 15 秒待っても話さなければ、何も言わずに待機に戻る", async () => {
+      const m = messenger();
+      const stt = new FakeStt([said("パパに連絡して"), "silent"]);
+      const { session, tts, sink } = setup({ llm: new FakeLlm([{ toolUses: [ask] }]), stt, tools: m.tools });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      await send(session, 20, 245); // 14.7 秒
+      expect(stt.streams[1]!.aborted).toBe(false);
+      await send(session, 20, 10);
+      await flush();
+      expect(stt.streams[1]!.aborted).toBe(true);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(tts.texts).toEqual(["なんて伝える？"]);
+    });
+
+    it("用件がつなぎの言葉だけなら送らずに聞き直し、次の聞き取りもゆっくり聞く", async () => {
+      const m = messenger();
+      const stt = new FakeStt([said("えっと"), "silent"]);
+      const llm = new FakeLlm([
+        { toolUses: [{ name: "send_family_message", input: { to: "パパ", text: "えっと", reply: "パパに送ったよ。" } }] },
+        { text: "なんて伝える？" },
+      ]);
+      const { session, tts } = setup({ llm, stt, tools: m.tools });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      expect(m.sent).toEqual([]);
+      expect(llm.requests).toHaveLength(2);
+      expect(tts.texts).toEqual(["なんて伝える？"]);
+      expect(stt.opts[1]).toEqual({ speechEndSeconds: 3 });
+    });
+
+    it("ふだんの聞き取りは、途中の 0.8 秒の無言で閉じる（今までどおり）", async () => {
+      const stt = new FakeStt([{ afterEnd: [{ type: "final", text: "えっと" }] }, "silent"]);
+      const { session, turns } = setup({ llm: new FakeLlm([{ text: "はい。" }]), stt, cfg: { followUpSeconds: 0 } });
+      session.onListenStart();
+      expect(stt.opts[0]).toBeUndefined();
+      await send(session, 20, 10);
+      await send(session, 100, 10);
+      await send(session, 20, 15);
+      await flush();
+      expect(stt.streams[0]!.ended).toBe(true);
+      expect(turns[0]).toMatchObject({ userText: "えっと" });
     });
   });
 
