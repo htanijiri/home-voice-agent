@@ -3,6 +3,8 @@ import { createServer, type Server } from "node:http";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OidcConfig } from "../src/web/auth.js";
+import type { PushSender } from "../src/adapters/web-push.js";
+import type { AppConfig } from "../src/config.js";
 import { FakeLlm, FakeStt, FakeTts } from "./fakes.js";
 import { startTestApp } from "./helpers.js";
 
@@ -55,9 +57,9 @@ async function fakeGoogle() {
   return { oidc, next, lastBody: () => lastBody };
 }
 
-async function setup() {
+async function setup(opts: { pushSender?: PushSender; configure?: (cfg: AppConfig) => void } = {}) {
   const g = await fakeGoogle();
-  const t = await startTestApp({ stt: new FakeStt(), tts: new FakeTts(), llm: new FakeLlm([]), oidc: g.oidc } as never);
+  const t = await startTestApp({ stt: new FakeStt(), tts: new FakeTts(), llm: new FakeLlm([]), oidc: g.oidc, ...opts } as never);
   cleanup.push(() => t.app.close());
   /** ログインの手続きを最後まで進め、Cookie を返す（失敗なら status を返す） */
   const login = async (claims: Record<string, unknown>, opts: { expired?: boolean; key?: CryptoKey } = {}) => {
@@ -70,8 +72,8 @@ async function setup() {
     const cb = await fetch(`${t.base}/auth/callback?state=${state}&code=abc`, { redirect: "manual" });
     return { status: cb.status, cookie: cb.headers.get("set-cookie") ?? "", loc };
   };
-  const session = async (email = "a@example.com") => {
-    const r = await login({ email, email_verified: true });
+  const session = async (email = "a@example.com", claims: Record<string, unknown> = {}) => {
+    const r = await login({ email, email_verified: true, ...claims });
     const cookie = r.cookie.split(";")[0]!;
     const html = await (await fetch(`${t.base}/`, { headers: { cookie } })).text();
     const csrf = /name="csrf" content="([^"]+)"/.exec(html)![1]!;
@@ -291,3 +293,93 @@ describe("変更の通知（008）", () => {
   });
 });
 
+
+describe("家族への連絡（016）", () => {
+  const ctx = { deviceId: "dev", householdId: "home", now: new Date() };
+
+  it("声の連絡を保存し、通知を送り、一覧に出す。1 日の上限を超えたら送らない", async () => {
+    const pushed: string[] = [];
+    const t = await setup({
+      pushSender: { send: async (_t, payload) => (pushed.push(payload), 201) },
+      configure: (c) => (c.family = { maxMessagesPerDay: 2, messageMaxChars: 100 }),
+    });
+    const s = await t.session();
+    await (await s.call("POST", "/push/subscribe", { endpoint: "https://fcm.googleapis.com/fcm/send/x", keys: { p256dh: "p", auth: "a" } })).json();
+
+    const now = t.clock.now();
+    const r1 = await t.app.tools.run("send_family_message", { to: "パパ", text: "今日のお迎え、何時？", reply: "パパに送ったよ。" }, { ...ctx, now });
+    expect(r1).toMatchObject({ isError: false, expected: true });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(pushed.map((p) => JSON.parse(p))).toEqual([{ title: "リビングから（パパへ）", body: "今日のお迎え、何時？", url: "/#messages" }]);
+
+    const r2 = await t.app.tools.run("send_family_message", { text: "連絡してほしいそうです" }, { ...ctx, now });
+    expect(r2.isError).toBe(false);
+    await new Promise((res) => setTimeout(res, 20));
+    expect(JSON.parse(pushed[1]!).title).toBe("リビングから（家族へ）");
+
+    const r3 = await t.app.tools.run("send_family_message", { to: "ママ", text: "3件目" }, { ...ctx, now });
+    expect(r3.isError).toBe(true);
+    expect(r3.content).toContain("今日はもう送れません");
+    expect(pushed).toHaveLength(2);
+
+    const list = (await (await s.call("GET", "/messages")).json()).messages;
+    expect(list.map((m: { kind: string; to: string | null; text: string }) => [m.kind, m.to, m.text])).toEqual([
+      ["voice", null, "連絡してほしいそうです"],
+      ["voice", "パパ", "今日のお迎え、何時？"],
+    ]);
+
+    // 次の日（家庭の時刻）になれば、また送れる
+    t.clock.advance(14 * 3_600_000); // 10:00 → 翌 0:00
+    const r4 = await t.app.tools.run("send_family_message", { text: "おはよう" }, { ...ctx, now: t.clock.now() });
+    expect(r4.isError).toBe(false);
+  });
+
+  it("用件が空・長すぎるときは送らない", async () => {
+    const t = await setup();
+    expect((await t.app.tools.run("send_family_message", { text: " " }, ctx)).isError).toBe(true);
+    expect((await t.app.tools.run("send_family_message", { text: "あ".repeat(101) }, ctx)).isError).toBe(true);
+    expect(t.app.messages.list("home")).toHaveLength(0);
+  });
+
+  it("確認画面からの読み上げを、送った人の名前と結果を付けて保存する", async () => {
+    const t = await setup();
+    const s = await t.session("a@example.com", { name: "テスト 花子" });
+    expect(await (await s.call("POST", "/announce", { text: "もうすぐ帰るよ" })).json()).toEqual({ status: "offline" });
+    const list = (await (await s.call("GET", "/messages")).json()).messages;
+    expect(list).toMatchObject([{ kind: "announce", text: "もうすぐ帰るよ", sender: "テスト 花子", status: "offline", to: null }]);
+    // 400 のときは保存しない
+    await s.call("POST", "/announce", { text: "" });
+    expect((await (await s.call("GET", "/messages")).json()).messages).toHaveLength(1);
+  });
+
+  it("通知の購読：許可された送り先だけ。CSRF が必要。解除できる", async () => {
+    const t = await setup();
+    const s = await t.session();
+    const ep = "https://fcm.googleapis.com/fcm/send/abc";
+    expect((await s.call("POST", "/push/subscribe", { endpoint: "https://evil.example/", keys: { p256dh: "p", auth: "a" } })).status).toBe(400);
+    expect((await s.call("POST", "/push/subscribe", { endpoint: ep, keys: { p256dh: "p", auth: "a" } }, { "x-csrf-token": "wrong" })).status).toBe(403);
+    expect((await s.call("POST", "/push/subscribe", { endpoint: ep, keys: { p256dh: "p", auth: "a" } })).status).toBe(200);
+    expect(await (await s.call("POST", "/push/status", { endpoint: ep })).json()).toEqual({ subscribed: true });
+    const key = (await (await s.call("GET", "/push/key")).json()).publicKey;
+    expect(Buffer.from(key, "base64url")).toHaveLength(65);
+    await s.call("POST", "/push/unsubscribe", { endpoint: ep });
+    expect(await (await s.call("POST", "/push/status", { endpoint: ep })).json()).toEqual({ subscribed: false });
+  });
+
+  it("連絡が増えると、開いている画面に messages の知らせが届く", async () => {
+    const t = await setup();
+    const got: string[] = [];
+    t.app.changes.subscribe((_hh, topic) => got.push(topic));
+    t.app.messages.addVoice("home", "パパ", "テスト", t.clock.now());
+    expect(got).toEqual(["messages"]);
+  });
+
+  it("秘密鍵を画面・API に出さない", async () => {
+    const t = await setup();
+    const s = await t.session();
+    const priv = t.app.kv.get<{ privateKey: string }>("web_push_vapid")!.privateKey;
+    const html = await (await fetch(`${t.base}/`, { headers: { cookie: s.cookie } })).text();
+    expect(html).not.toContain(priv);
+    expect(await (await s.call("GET", "/push/key")).text()).not.toContain(priv);
+  });
+});

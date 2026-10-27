@@ -46,13 +46,18 @@ app.reminders.create("home", "ゴミ出し", { kind: "once", date: tomorrow8.toL
 app.reminders.create("home", "燃えるゴミ", { kind: "weekly", weekdays: [1, 4], time: "07:30" }, tomorrow8, now);
 app.reminders.create("home", "資源ゴミ（とても長い名前のリマインダーの表示を確かめるための例）", { kind: "monthly_nth", nths: [2, 4], weekday: 3, time: "08:00" }, tomorrow8, now);
 app.turns.insert({ deviceId: "d", userText: "日本で一番高い山は？", assistantText: "富士山です。高さは3776メートルです。", outcome: "ok", timings: {} }, now);
+const ago = (min: number) => new Date(now.getTime() - min * 60_000);
+app.messages.addVoice("home", "パパ", "今日のお迎え、何時？", ago(90));
+app.messages.addAnnounce("home", "5時に行くよ", { email: "preview@example.com", name: "テスト 太郎" }, "sent", ago(80));
+app.messages.addVoice("home", undefined, "連絡してほしいそうです", ago(30));
+app.messages.addAnnounce("home", "お風呂を沸かしておいて", { email: "preview@example.com", name: "テスト 太郎" }, "offline", ago(5));
 app.devices.ensurePending("02:00:00:00:00:99", "c", now);
 app.usage.add(now, "turns", 42);
 app.usage.add(now, "stt_seconds", 600);
 app.usage.add(now, "tts_chars", 5200);
 
 app.http.get("/dev/login", async (_req, reply) => {
-  const s = app.webAuth!.createSession("preview@example.com");
+  const s = app.webAuth!.createSession("preview@example.com", new Date(), "テスト 太郎");
   reply.header("Set-Cookie", `hva_session=${s.id}; Path=/; HttpOnly; SameSite=Lax`);
   return reply.redirect("/");
 });

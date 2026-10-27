@@ -1,8 +1,8 @@
-// 買い物リスト・リマインダーの変更の通知。確認画面を開いている間、画面に知らせて一覧を読み直させる。
+// 買い物リスト・リマインダー・家族への連絡の変更の通知。確認画面を開いている間、画面に知らせて一覧を読み直させる。
 // サーバーは1プロセスなので、メモリ上の購読で足りる。
 import { errorFields, log } from "../log.js";
 
-export type ChangeTopic = "shopping" | "reminders";
+export type ChangeTopic = "shopping" | "reminders" | "messages";
 export type ChangeListener = (householdId: string, topic: ChangeTopic) => void;
 
 export class ChangeFeed {

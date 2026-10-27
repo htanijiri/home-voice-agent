@@ -12,6 +12,7 @@ import { errorFields, log } from "../log.js";
 import { estimateMonthlyCost } from "../report/cost.js";
 import { LoginError, SESSION_DAYS, type WebAuth } from "./auth.js";
 import { renderLoginPage, renderAppPage } from "./page.js";
+import { ICON_PNG, MANIFEST, SERVICE_WORKER } from "./pwa.js";
 
 const COOKIE = "hva_session";
 /** 変更の通知（SSE）のハートビートの間隔。Fly のプロキシのアイドル切断より短くする */
@@ -21,7 +22,7 @@ export const ANNOUNCE_MAX_CHARS = 100;
 
 declare module "fastify" {
   interface FastifyRequest {
-    user?: { email: string; csrf: string };
+    user?: { email: string; csrf: string; name?: string };
   }
 }
 
@@ -29,7 +30,7 @@ class BadRequest extends UserError {}
 
 export async function registerWeb(
   http: FastifyInstance,
-  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage" | "changes" | "announcer">,
+  app: Pick<App, "shopping" | "reminders" | "devices" | "turns" | "usage" | "changes" | "announcer" | "messages" | "push">,
   auth: WebAuth,
   config: AppConfig,
   clock: Clock,
@@ -78,8 +79,8 @@ export async function registerWeb(
     const { state, code } = req.query;
     try {
       if (!state || !code) throw new LoginError("ログインできませんでした");
-      const email = await auth.complete(state, code);
-      const s = auth.createSession(email, clock.now());
+      const { email, name } = await auth.complete(state, code);
+      const s = auth.createSession(email, clock.now(), name);
       reply.setCookie(COOKIE, s.id, {
         path: "/",
         httpOnly: true,
@@ -100,6 +101,17 @@ export async function registerWeb(
     reply.clearCookie(COOKIE, { path: "/" });
     return { ok: true };
   });
+
+  // ---- 通知のための Service Worker など（016）。ログインなしで出す ----
+  http.get("/sw.js", async (_req, reply) =>
+    reply.type("application/javascript; charset=utf-8").header("Cache-Control", "no-cache").send(SERVICE_WORKER),
+  );
+  http.get("/manifest.webmanifest", async (_req, reply) =>
+    reply.type("application/manifest+json; charset=utf-8").send(MANIFEST),
+  );
+  http.get("/icon-192.png", async (_req, reply) =>
+    reply.type("image/png").header("Cache-Control", "public, max-age=86400").send(ICON_PNG),
+  );
 
   // ---- 画面 ----
   http.get("/", async (req, reply) => {
@@ -156,13 +168,57 @@ export async function registerWeb(
     scope.post("/shopping/:id/restore", async (req) => app.shopping.restore(hh, idOf(req), clock.now()));
     scope.delete("/shopping/:id", async (req) => app.shopping.setStatus(hh, idOf(req), "deleted", clock.now()));
 
-    // 確認画面から読み上げる（014）。文章はログにもデータベースにも残さない
+    // 確認画面から読み上げる（014）。文章はログに出さない。「連絡」タブに並べるため 30 日保存する（016）
     scope.post<{ Body: { text?: string } }>("/announce", async (req) => {
       const text = String(req.body?.text ?? "").trim();
       if (!text) throw new BadRequest("読み上げる文章を入れてください");
       if ([...text].length > ANNOUNCE_MAX_CHARS) throw new BadRequest(`${ANNOUNCE_MAX_CHARS} 文字までです`);
-      return { status: await app.announcer.announce(text) };
+      let id: number | undefined;
+      let settled: "sent" | "dropped" | undefined;
+      const status = await app.announcer.announce(text, (r) => {
+        if (id === undefined) settled = r;
+        else app.messages.setStatus(id, r);
+      });
+      const sender = { email: req.user!.email, name: req.user!.name ?? req.user!.email.split("@")[0] };
+      id = app.messages.addAnnounce(hh, text, sender, settled ?? status, clock.now()).id;
+      return { status };
     });
+
+    // 家族への連絡（016）。リビングからの声の連絡と、確認画面からの読み上げを、新しい順に
+    scope.get("/messages", async () => ({
+      messages: app.messages.list(hh, 100).map((m) => ({
+        id: m.id,
+        kind: m.kind,
+        to: m.to_label,
+        text: m.text,
+        sender: m.sender_name,
+        status: m.status,
+        at: m.created_at,
+      })),
+    }));
+
+    // スマホへの通知の購読（016）
+    scope.get("/push/key", async () => ({ publicKey: app.push.publicKey }));
+    scope.post<{ Body: { endpoint?: string; keys?: { p256dh?: string; auth?: string } } }>("/push/subscribe", async (req) => {
+      const endpoint = String(req.body?.endpoint ?? "");
+      try {
+        app.push.subscribe(
+          { endpoint, p256dh: String(req.body?.keys?.p256dh ?? ""), auth: String(req.body?.keys?.auth ?? "") },
+          req.user!.email,
+          clock.now(),
+        );
+      } catch (err) {
+        throw new BadRequest((err as Error).message);
+      }
+      return { ok: true };
+    });
+    scope.post<{ Body: { endpoint?: string } }>("/push/unsubscribe", async (req) => {
+      app.push.unsubscribe(String(req.body?.endpoint ?? ""));
+      return { ok: true };
+    });
+    scope.post<{ Body: { endpoint?: string } }>("/push/status", async (req) => ({
+      subscribed: app.push.isSubscribed(String(req.body?.endpoint ?? "")),
+    }));
 
     // リマインダー（画面では日付・時刻・繰り返しを直接指定する）
     const view = (r: ReturnType<typeof app.reminders.active>[number]) => ({

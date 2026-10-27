@@ -48,6 +48,11 @@ input[type=checkbox] { width:22px; height:22px; accent-color:var(--accent); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 td { padding:6px 0; border-bottom:1px solid var(--line); }
 td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.msg-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+.msg-head b { font-size:14px; }
+.msg-text { margin-top:2px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.tag { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 8px; }
+.notify-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 `;
 
 export function renderLoginPage(message?: string): string {
@@ -63,11 +68,13 @@ ${message ? `<p style="color:var(--danger)">${esc(message)}</p>` : ""}
 
 export function renderAppPage(email: string, csrf: string): string {
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="csrf" content="${esc(csrf)}"><title>アイリス</title><style>${STYLE}</style></head><body>
+<meta name="csrf" content="${esc(csrf)}"><meta name="theme-color" content="#2f6f5e"><link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><title>アイリス</title><style>${STYLE}</style></head><body>
 <header><h1>アイリス</h1><nav role="tablist">
 <button role="tab" data-tab="shopping" aria-selected="true">買い物</button>
 <button role="tab" data-tab="reminders" aria-selected="false">リマインダー</button>
 <button role="tab" data-tab="announce" aria-selected="false">話す</button>
+<button role="tab" data-tab="messages" aria-selected="false">連絡</button>
 <button role="tab" data-tab="more" aria-selected="false">その他</button>
 </nav></header>
 <main>
@@ -103,7 +110,15 @@ export function renderAppPage(email: string, csrf: string): string {
     <label class="field"><span>アイリスに読み上げてもらう文章（チャイムのあとに読み上げます）</span><textarea name="text" rows="3" maxlength="100" required placeholder="例：もうすぐ帰るよ"></textarea></label>
     <div class="row" style="display:flex;gap:8px;align-items:center"><button class="btn primary" id="announce-send">読み上げる</button><span class="sub" id="announce-count">あと 100 文字</span></div>
   </form>
-  <p class="sub">アイリスが会話中のときは、会話が終わってから読み上げます（2分まで待ちます）。送った文章は保存しません。</p>
+  <p class="sub">アイリスが会話中のときは、会話が終わってから読み上げます（2分まで待ちます）。送った文章は「連絡」タブに 30 日間残ります。</p>
+</section>
+<section id="tab-messages" hidden>
+  <div class="card">
+    <div class="notify-row"><button class="btn" id="push-toggle" disabled>通知を受け取る</button><span class="sub" id="push-state">確認中…</span></div>
+    <p class="sub" id="push-hint" hidden></p>
+  </div>
+  <div class="card"><ul class="list" id="msg-list"></ul></div>
+  <p class="sub">リビングで「アイリス、パパに連絡して」と言うと、ここに届きます。返事は「話す」タブから送れます。30 日たつと消えます。</p>
 </section>
 <section id="tab-more" hidden>
   <h2>端末</h2>
@@ -246,8 +261,73 @@ announceForm.addEventListener('submit', async (e) => {
     if (r.status === 'sent' || r.status === 'queued') { announceForm.reset(); announceCount(); }
   } catch {} finally { btn.disabled = false; }
 });
-function load(tab) { ({ shopping: loadShopping, reminders: loadReminders, announce: async () => {}, more: loadMore })[tab]().catch(() => {}); }
-load('shopping');
+// 家族への連絡（016）
+const ANNOUNCE_STATUS = { sent: '読み上げました', queued: '会話が終わるのを待っています', dropped: '会話が終わらず、読み上げませんでした', offline: 'アイリスがつながっていなかったため、読み上げていません', busy: '待っている読み上げが多く、読み上げていません' };
+async function loadMessages() {
+  const d = await api('GET', '/messages');
+  const list = $('#msg-list'); list.replaceChildren();
+  if (!d.messages.length) list.append(el('li', { class: 'empty', text: 'まだ連絡はありません' }));
+  for (const m of d.messages) {
+    const at = new Date(m.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const head = m.kind === 'voice'
+      ? el('div', { class: 'msg-head' }, el('b', { text: '🏠 リビングから' }), el('span', { class: 'tag', text: (m.to || '家族') + 'へ' }), el('span', { class: 'sub', text: at }))
+      : el('div', { class: 'msg-head' }, el('b', { text: '📱 ' + (m.sender || '確認画面') + ' から' }), el('span', { class: 'sub', text: at }));
+    const body = [head, el('div', { class: 'msg-text', text: m.text })];
+    if (m.kind === 'announce') body.push(el('div', { class: 'sub', text: ANNOUNCE_STATUS[m.status] || '' }));
+    list.append(el('li', {}, el('div', { class: 'grow' }, ...body)));
+  }
+}
+// スマホへの通知（Web Push）
+const swReady = 'serviceWorker' in navigator ? navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
+const b64ToBytes = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+async function pushSub() { const reg = await swReady; return reg && 'pushManager' in reg ? { reg, sub: await reg.pushManager.getSubscription() } : null; }
+async function showPushState() {
+  const btn = $('#push-toggle'), state = $('#push-state'), hint = $('#push-hint');
+  const p = await pushSub();
+  hint.hidden = true;
+  if (!p || !('Notification' in window)) {
+    btn.disabled = true; btn.textContent = '通知を受け取る'; state.textContent = 'このブラウザでは通知を受け取れません';
+    if (/iPhone|iPad/.test(navigator.userAgent)) { hint.hidden = false; hint.textContent = 'iPhone では、共有ボタンの「ホーム画面に追加」で追加したアイコンから開くと、通知を受け取れます。'; }
+    return;
+  }
+  const on = !!p.sub && Notification.permission === 'granted' && (await api('POST', '/push/status', { endpoint: p.sub.endpoint })).subscribed;
+  btn.disabled = false;
+  btn.textContent = on ? '通知をやめる' : '通知を受け取る';
+  btn.classList.toggle('primary', !on);
+  btn.dataset.on = on ? '1' : '';
+  state.textContent = on ? 'このスマホに通知が届きます' : Notification.permission === 'denied' ? '通知がブロックされています' : '通知はオフです';
+  if (Notification.permission === 'denied') { hint.hidden = false; hint.textContent = 'ブラウザのサイトの設定で、通知を「許可」にしてから押してください。'; }
+}
+$('#push-toggle').addEventListener('click', async () => {
+  const btn = $('#push-toggle'); btn.disabled = true;
+  try {
+    const p = await pushSub();
+    if (!p) return;
+    if (btn.dataset.on) {
+      if (p.sub) { await api('POST', '/push/unsubscribe', { endpoint: p.sub.endpoint }); await p.sub.unsubscribe(); }
+      toast('通知をやめました');
+    } else {
+      if ((await Notification.requestPermission()) !== 'granted') { toast('通知が許可されませんでした'); return; }
+      const { publicKey } = await api('GET', '/push/key');
+      const opts = { userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) };
+      let sub;
+      try { sub = await p.reg.pushManager.subscribe(opts); }
+      catch { if (p.sub) await p.sub.unsubscribe(); sub = await p.reg.pushManager.subscribe(opts); }
+      await api('POST', '/push/subscribe', sub.toJSON());
+      toast('このスマホに通知が届くようになりました');
+    }
+  } catch (e) { toast('通知の設定ができませんでした'); }
+  finally { showPushState().catch(() => {}); }
+});
+function selectTab(tab) {
+  const b = document.querySelector('nav button[data-tab="' + tab + '"]');
+  if (b) b.click();
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'open') selectTab('messages'); });
+function load(tab) {
+  ({ shopping: loadShopping, reminders: loadReminders, announce: async () => {}, messages: async () => { await loadMessages(); await showPushState(); }, more: loadMore })[tab]().catch(() => {});
+}
+if (location.hash === '#messages') { history.replaceState(null, '', '/'); selectTab('messages'); } else load('shopping');
 // 声や別のスマホでの変更を、サーバーからの知らせ（SSE）で受けて、表示中のタブを読み直す
 const currentTab = () => document.querySelector('nav button[aria-selected=true]').dataset.tab;
 function reloadSoon(tab) { if (tab && tab !== currentTab()) return; clearTimeout(reloadSoon.t); reloadSoon.t = setTimeout(() => load(currentTab()), 300); }
@@ -256,6 +336,7 @@ function listen() {
   let opened = false;
   es.addEventListener('shopping', () => reloadSoon('shopping'));
   es.addEventListener('reminders', () => reloadSoon('reminders'));
+  es.addEventListener('messages', () => reloadSoon('messages'));
   // つながり直したときは、切れていた間の変更を取りこぼさないよう読み直す
   es.addEventListener('open', () => { if (opened) reloadSoon(); opened = true; });
   // 503 などで閉じられると自動ではつながり直さないので、少し待って作り直す

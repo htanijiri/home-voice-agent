@@ -61,7 +61,7 @@ export class WebAuth {
       client_id: this.oidc.clientId,
       redirect_uri: this.redirectUri(),
       response_type: "code",
-      scope: "openid email",
+      scope: "openid email profile",
       state,
       nonce,
       code_challenge: b64url(sha256(verifier)),
@@ -71,8 +71,8 @@ export class WebAuth {
     return u.toString();
   }
 
-  /** Google から戻ってきたとき。ログインできたらメールアドレスを返す */
-  async complete(state: string, code: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  /** Google から戻ってきたとき。ログインできたらメールアドレスと名前（連絡の送り主の表示に使う。016）を返す */
+  async complete(state: string, code: string, fetchImpl: typeof fetch = fetch): Promise<{ email: string; name?: string }> {
     const p = this.pending.get(state);
     this.pending.delete(state);
     if (!p || p.expiresAt < Date.now()) throw new LoginError("ログインの手続きの期限が切れました。もう一度お試しください");
@@ -101,28 +101,34 @@ export class WebAuth {
     const email = String(payload.email ?? "").toLowerCase();
     if (payload.email_verified !== true || !email) throw new LoginError("メールアドレスが確認されていないアカウントです");
     if (!this.oidc.allowedEmails.includes(email)) throw new LoginError("このアカウントは登録されていません");
-    return email;
+    const name = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim().slice(0, 40) : undefined;
+    return { email, name };
   }
 
-  createSession(email: string, now = new Date()): { id: string; csrf: string; expires: Date } {
+  createSession(email: string, now = new Date(), name?: string): { id: string; csrf: string; expires: Date } {
     const id = b64url(randomBytes(32));
     const csrf = b64url(randomBytes(24));
     const expires = new Date(now.getTime() + SESSION_DAYS * 86_400_000);
     this.db
-      .prepare("INSERT INTO web_sessions (id_hash, email, csrf, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
-      .run(sha256(id).toString("hex"), email, csrf, now.toISOString(), expires.toISOString());
+      .prepare("INSERT INTO web_sessions (id_hash, email, csrf, created_at, expires_at, name) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(sha256(id).toString("hex"), email, csrf, now.toISOString(), expires.toISOString(), name ?? null);
     return { id, csrf, expires };
   }
 
-  getSession(id: string | undefined, now = new Date()): { email: string; csrf: string } | undefined {
+  getSession(id: string | undefined, now = new Date()): { email: string; csrf: string; name?: string } | undefined {
     if (!id) return undefined;
     const row = this.db
-      .prepare("SELECT email, csrf, expires_at FROM web_sessions WHERE id_hash = ?")
-      .get(sha256(id).toString("hex")) as { email: string; csrf: string; expires_at: string } | undefined;
+      .prepare("SELECT email, csrf, expires_at, name FROM web_sessions WHERE id_hash = ?")
+      .get(sha256(id).toString("hex")) as { email: string; csrf: string; expires_at: string; name: string | null } | undefined;
     if (!row || row.expires_at < now.toISOString()) return undefined;
     // 許可リストから外された人は入れない
     if (!this.oidc.allowedEmails.includes(row.email)) return undefined;
-    return { email: row.email, csrf: row.csrf };
+    return { email: row.email, csrf: row.csrf, name: row.name ?? undefined };
+  }
+
+  /** 確認画面に入れる人のメールアドレス */
+  get allowedEmails(): string[] {
+    return this.oidc.allowedEmails;
   }
 
   deleteSession(id: string | undefined) {

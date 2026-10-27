@@ -128,7 +128,8 @@ describe("確認画面から読み上げる（014）", () => {
     const dev = await s.connect();
     await dev.openAudio();
     await settle();
-    expect(await s.app.announcer.announce("お風呂を沸かしておいて")).toBe("queued");
+    const settled: string[] = [];
+    expect(await s.app.announcer.announce("お風呂を沸かしておいて", (r) => settled.push(r))).toBe("queued");
     await s.app.announcer.flush();
     expect(s.notifies(dev)).toHaveLength(0);
     dev.goodbye();
@@ -136,12 +137,14 @@ describe("確認画面から読み上げる（014）", () => {
     await s.app.announcer.flush();
     await settle();
     expect(s.notifies(dev).map((m) => m.subtitles[0].text)).toEqual(["お風呂を沸かしておいて"]);
+    expect(settled).toEqual(["sent"]);
 
     await dev.openAudio();
     await settle();
-    expect(await s.app.announcer.announce("先に寝るね")).toBe("queued");
+    expect(await s.app.announcer.announce("先に寝るね", (r) => settled.push(r))).toBe("queued");
     s.clock.advance(121_000);
     await s.app.announcer.flush();
+    expect(settled).toEqual(["sent", "dropped"]);
     dev.goodbye();
     await settle();
     await s.app.announcer.flush();

@@ -67,6 +67,12 @@ dailyTurns = 200
 # リマインダーの読み上げが終わってから、反応（呼びかけ・ボタン）を待つ秒数。反応がなければ、すぐもう1回だけ読み上げる
 retryWaitSeconds = 10
 
+[family]
+# リビングからの声の連絡（016）を、1 日に送れる数。超えたら「今日はもう送れない」と答える
+maxMessagesPerDay = 30
+# 1 件の用件の長さの上限（文字）
+messageMaxChars = 100
+
 [volume]
 day = 65
 night = 50

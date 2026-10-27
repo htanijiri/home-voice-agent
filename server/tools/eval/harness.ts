@@ -11,6 +11,7 @@ import { ToolRegistry } from "../../src/core/tools/registry.js";
 import { reminderTools } from "../../src/core/tools/reminders.js";
 import { shoppingTools } from "../../src/core/tools/shopping.js";
 import { conversationTools } from "../../src/core/tools/conversation.js";
+import { messageTools } from "../../src/core/tools/messages.js";
 import { FOLLOW_UP_NOTE } from "../../src/core/voice-session.js";
 import type { ChatMessage } from "../../src/core/types.js";
 import { openDb } from "../../src/db/db.js";
@@ -27,7 +28,14 @@ export function newWorld(now = new Date("2026-10-20T10:00:00+09:00")) {
   const db = openDb(":memory:");
   const shopping = new ShoppingRepo(db);
   const reminders = new RemindersRepo(db, "Asia/Tokyo");
-  const tools = new ToolRegistry().register(...shoppingTools(shopping), ...reminderTools(reminders, "Asia/Tokyo"), ...conversationTools());
+  /** 家族への連絡（016）。送ったものを覚えておく */
+  const sent: { to?: string; text: string }[] = [];
+  const tools = new ToolRegistry().register(
+    ...shoppingTools(shopping),
+    ...reminderTools(reminders, "Asia/Tokyo"),
+    ...conversationTools(),
+    ...messageTools({ send: async (_hh, to, text) => void sent.push({ to, text }) }, 100),
+  );
   const clock: Clock = { now: () => now };
   const llm = new AnthropicLlm({ apiKey: apiKey!, ...config.llm });
   const o = new Orchestrator(
@@ -54,7 +62,7 @@ export function newWorld(now = new Date("2026-10-20T10:00:00+09:00")) {
     }
     return out;
   };
-  return { db, shopping, reminders, say, history, firstSentenceMs, ended: () => state.ended };
+  return { db, shopping, reminders, say, history, firstSentenceMs, sent, ended: () => state.ended };
 }
 
 /** Claude Haiku に、条件を満たすかを判定させる（YES / NO） */

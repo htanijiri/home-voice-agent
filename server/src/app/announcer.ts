@@ -16,12 +16,14 @@ export interface AnnouncerConfig {
 }
 
 export type AnnounceStatus = "sent" | "queued" | "offline" | "busy";
+/** 待っていた読み上げの結末。dropped は、会話が終わらずあきらめたもの */
+export type AnnounceSettled = "sent" | "dropped";
 
 /** 待ち行列に置ける数（家族数人の伝言なので少なくてよい） */
 const MAX_QUEUE = 5;
 
 export class Announcer {
-  private readonly queue: { text: string; expiresAt: number }[] = [];
+  private readonly queue: { text: string; expiresAt: number; onSettled?: (r: AnnounceSettled) => void }[] = [];
   private timer?: NodeJS.Timeout;
   private flushing = false;
 
@@ -43,8 +45,11 @@ export class Announcer {
     return this.targets().filter((id) => !this.hub.isBusy(id));
   }
 
-  /** 確認画面からの読み上げ。待機中ならすぐ送り、会話中なら終わるのを待つ */
-  async announce(text: string): Promise<AnnounceStatus> {
+  /**
+   * 確認画面からの読み上げ。待機中ならすぐ送り、会話中なら終わるのを待つ。
+   * 待つことになったら、送ったか・あきらめたかを onSettled で知らせる
+   */
+  async announce(text: string, onSettled?: (r: AnnounceSettled) => void): Promise<AnnounceStatus> {
     if (this.targets().length === 0) return "offline";
     const idle = this.idleTargets();
     if (idle.length > 0) {
@@ -52,7 +57,7 @@ export class Announcer {
       return "sent";
     }
     if (this.queue.length >= MAX_QUEUE) return "busy";
-    this.queue.push({ text, expiresAt: this.clock.now().getTime() + (this.cfg.maxWaitMs ?? 120_000) });
+    this.queue.push({ text, expiresAt: this.clock.now().getTime() + (this.cfg.maxWaitMs ?? 120_000), onSettled });
     log.info("announce queued", { chars: [...text].length });
     this.timer ??= setInterval(() => void this.flush(), 5_000);
     this.timer.unref?.();
@@ -69,11 +74,13 @@ export class Announcer {
       if (expired.length) {
         this.queue.splice(0, this.queue.length, ...this.queue.filter((q) => q.expiresAt >= now));
         log.info("announce dropped", { count: expired.length });
+        for (const q of expired) q.onSettled?.("dropped");
       }
       const idle = this.idleTargets();
       if (idle.length > 0 && this.queue.length > 0) {
         const items = this.queue.splice(0);
         await this.send(idle, items.map((q) => q.text).join(""), "お知らせ");
+        for (const q of items) q.onSettled?.("sent");
       }
       if (this.queue.length === 0) this.stop();
     } finally {

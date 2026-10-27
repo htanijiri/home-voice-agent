@@ -128,6 +128,29 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE reminder_deliveries ADD COLUMN retry_at TEXT;
   `,
+  // 10: 家族への連絡（016）。リビングからの声の連絡と、確認画面からの読み上げを並べる。30 日で消す
+  `
+  CREATE TABLE family_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    to_label TEXT,
+    text TEXT NOT NULL,
+    sender_email TEXT,
+    sender_name TEXT,
+    status TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX family_messages_created ON family_messages(household_id, created_at);
+  CREATE TABLE push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    email TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  ALTER TABLE web_sessions ADD COLUMN name TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

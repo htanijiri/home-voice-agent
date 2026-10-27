@@ -28,6 +28,7 @@ export async function startTestApp(opts: {
   tools?: ToolRegistry;
   clock?: FakeClock;
   oidc?: import("../src/web/auth.js").OidcConfig;
+  pushSender?: import("../src/adapters/web-push.js").PushSender;
   configure?: (cfg: ReturnType<typeof testConfig>) => void;
 }) {
   const config = testConfig();
@@ -43,6 +44,7 @@ export async function startTestApp(opts: {
     llm: opts.llm,
     tools: opts.tools,
     oidc: opts.oidc,
+    pushSender: opts.pushSender,
     promptsDir: resolve(import.meta.dirname, "../prompts"),
   });
   // 実際のポートが決まってから、OTA が返す WebSocket の URL を作り直す

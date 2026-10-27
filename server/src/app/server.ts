@@ -34,6 +34,11 @@ import { DEFAULT_LOCAL_VAD } from "../core/local-vad.js";
 import { ChangeFeed } from "./change-feed.js";
 import { JobRunner, type Job } from "./jobs.js";
 import { VolumePolicy } from "./volume-policy.js";
+import { MessagesRepo } from "../db/messages-repo.js";
+import { PushRepo } from "../db/push-repo.js";
+import { type FamilyMessenger, messageTools } from "../core/tools/messages.js";
+import { type PushSender, WebPushSender } from "../adapters/web-push.js";
+import { loadOrCreateVapidKeys, PushService } from "./push.js";
 
 export interface AppDeps {
   config: AppConfig;
@@ -47,6 +52,8 @@ export interface AppDeps {
   promptsDir?: string;
   /** 確認画面のログイン（Google）。なければ確認画面は使えない */
   oidc?: OidcConfig;
+  /** スマホへの通知の送り方（テストでは偽物）。なければ Web Push で送る */
+  pushSender?: PushSender;
 }
 
 export interface App {
@@ -65,6 +72,10 @@ export interface App {
   scheduler: ReminderScheduler;
   /** チャイムのあとの読み上げ（リマインダー・確認画面から） */
   announcer: Announcer;
+  /** 家族への連絡（016） */
+  messages: MessagesRepo;
+  /** スマホへの通知（016） */
+  push: PushService;
   jobs: JobRunner;
   volume: VolumePolicy;
   listen(port?: number, host?: string): Promise<number>;
@@ -93,7 +104,33 @@ export function createApp(deps: AppDeps): App {
   const shopping = new ShoppingRepo(db, (hh) => changes.notify(hh, "shopping"));
   const tools = deps.tools ?? new ToolRegistry();
   const reminders = new RemindersRepo(db, tz, (hh) => changes.notify(hh, "reminders"));
-  tools.register(volumeTool(), ...shoppingTools(shopping), ...reminderTools(reminders, tz), ...conversationTools());
+  const messages = new MessagesRepo(db, tz, (hh) => changes.notify(hh, "messages"));
+  const vapid = loadOrCreateVapidKeys(kv);
+  const push = new PushService(
+    new PushRepo(db),
+    deps.pushSender ?? new WebPushSender(vapid, config.server.publicBaseUrl),
+    vapid.publicKey,
+  );
+  const maxMessagesPerDay = config.family?.maxMessagesPerDay ?? 30;
+  const messenger: FamilyMessenger = {
+    async send(householdId, to, text, now) {
+      if (messages.voiceCountOn(householdId, now) >= maxMessagesPerDay) {
+        throw new Error(`今日はもう送れません（1 日 ${maxMessagesPerDay} 件まで）`);
+      }
+      messages.addVoice(householdId, to, text, now);
+      // 文章と宛先はログに出さない
+      log.info("family message", { chars: [...text].length });
+      // 通知を待たずに返事をする
+      void push.notifyAll({ title: `リビングから（${to ?? "家族"}へ）`, body: text, url: "/#messages" });
+    },
+  };
+  tools.register(
+    volumeTool(),
+    ...shoppingTools(shopping),
+    ...reminderTools(reminders, tz),
+    ...conversationTools(),
+    ...messageTools(messenger, config.family?.messageMaxChars ?? 100),
+  );
   let scheduler: ReminderScheduler | undefined;
   const volume = new VolumePolicy(config.volume, tz, kv);
 
@@ -208,6 +245,8 @@ export function createApp(deps: AppDeps): App {
         const cutoff = new Date(now.getTime() - config.retention.conversationDays * 86_400_000);
         const n = turns.deleteOlderThan(cutoff);
         if (n) log.info("old turns deleted", { count: n });
+        const m = messages.deleteOlderThan(cutoff);
+        if (m) log.info("old messages deleted", { count: m });
         shopping.purge(now);
       },
     },
@@ -222,8 +261,15 @@ export function createApp(deps: AppDeps): App {
     ? new WebAuth(db, deps.oidc, () => `${config.server.publicBaseUrl}/auth/callback`)
     : undefined;
   if (webAuth) {
-    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage, changes, announcer }, webAuth, config, clock));
-    jobs.push({ name: "web-sessions", at: "04:00", run: (now) => webAuth.purge(now) });
+    http.register(async (scope) => registerWeb(scope, { shopping, reminders, devices, turns, usage, changes, announcer, messages, push }, webAuth, config, clock));
+    jobs.push({
+      name: "web-sessions",
+      at: "04:00",
+      run: (now) => {
+        webAuth.purge(now);
+        push.removeExcept(webAuth.allowedEmails);
+      },
+    });
   } else {
     http.get("/", async (_req, reply) =>
       reply.type("text/html; charset=utf-8").send("<p>確認画面のログインの設定（GOOGLE_OAUTH_CLIENT_ID など）がありません。</p>"),
@@ -256,6 +302,8 @@ export function createApp(deps: AppDeps): App {
     changes,
     scheduler,
     announcer,
+    messages,
+    push,
     jobs: jobRunner,
     volume,
     async listen(port = config.server.httpPort, host = "0.0.0.0") {
