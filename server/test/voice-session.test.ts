@@ -301,6 +301,22 @@ describe("VoiceSession", () => {
       expect(session.history.map((m) => m.role)).toEqual(["user", "assistant"]);
     });
 
+    it("続けての聞き取りで「No reply」などだけを書いたら、読み上げずに黙って待機に戻り、履歴にも残さない", async () => {
+      const stt = new FakeStt([said("天気どう"), said("うん")]);
+      const llm = new FakeLlm([{ text: "まだ天気にはつながっていません。" }, { text: "No reply" }]);
+      const { session, sink, tts, turns } = setup({ llm, stt });
+      session.onListenStart();
+      session.onAudio(frame);
+      await flush(40);
+      session.onAudio(frame);
+      await flush(40);
+      expect(tts.texts).toEqual(["まだ天気にはつながっていません。"]);
+      expect(sink.events.at(-1)).toBe("end");
+      expect(stt.streams).toHaveLength(2);
+      expect(turns[1]).toMatchObject({ outcome: "ok", assistantText: "", errorKind: "ignored" });
+      expect(session.history.map((m) => m.role)).toEqual(["user", "assistant"]);
+    });
+
     it("続けての聞き取りで言葉にならなかったときは「聞き取れませんでした」と言わずに待機に戻る", async () => {
       const stt = new FakeStt([said("こんにちは"), [{ type: "speech_start" }, { type: "final", text: "" }, { type: "speech_end" }]]);
       const { session, sink, tts, turns } = setup({ llm: new FakeLlm([{ text: "こんにちは。" }]), stt });

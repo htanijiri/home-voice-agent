@@ -355,8 +355,10 @@ export class VoiceSession {
         this.record(userText, spoken.join(""), "aborted");
         return;
       }
-      if (spoken.length === 0 && this.endRequested) {
-        // 話しかけでない声として、黙って終えた（未通知のリマインダーの案内は、次の会話に残す）
+      if (spoken.length === 0 && (this.endRequested || followUp)) {
+        // 話しかけでない声として、黙って終えた（未通知のリマインダーの案内は、次の会話に残す）。
+        // 続けての聞き取りで、読み上げる文が何もなかった（「No reply」などだけを書いた）ときも同じに扱う
+        this.endRequested = true;
         this.record(userText, "", "ok", "ignored");
       } else {
         pending?.consume();

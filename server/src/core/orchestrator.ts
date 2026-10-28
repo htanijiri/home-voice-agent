@@ -83,6 +83,9 @@ export class Orchestrator {
     const working: ChatMessage[] = [...input.history, { role: "user", content: userContent }];
     const system = this.systemPrompt;
 
+    /** この回で何か読み上げたか。ツールも呼ばず何も読み上げなかった回は、履歴に残さない */
+    let spokeAny = false;
+    let ranTools = false;
     try {
       for (let round = 0; ; round++) {
         if (round > this.config.maxToolRounds) {
@@ -102,6 +105,7 @@ export class Orchestrator {
               for (const s of splitter.push(ev.text)) {
                 if (!isSpeakable(s)) continue;
                 clearFirst();
+                spokeAny = true;
                 yield s;
               }
             } else {
@@ -118,6 +122,7 @@ export class Orchestrator {
         for (const s of splitter.flush()) {
           if (!isSpeakable(s)) continue;
           clearFirst();
+          spokeAny = true;
           yield s;
         }
         if (!final) throw new ConversationError("llm", "llm stream ended without a message");
@@ -132,13 +137,12 @@ export class Orchestrator {
           yield REFUSAL_MESSAGE;
           return;
         }
-        // 履歴には、読み上げなかった文を残さない（漏れた英語の考えごとを、次の返事で真似させないため）
-        working.push({
-          ...final,
-          content: final.content
-            .map((b) => (b.type === "text" ? { ...b, text: cleanSpokenText(b.text) } : b))
-            .filter((b) => b.type !== "text" || b.text.length > 0),
-        });
+        // 履歴には、読み上げなかった文を残さない（漏れた英語の考えごとや「No reply」を、次の返事で真似させないため）。
+        // 残すものがなければ、空の返事は置かない（中身が空の assistant は API が受け付けない）
+        const kept = final.content
+          .map((b) => (b.type === "text" ? { ...b, text: cleanSpokenText(b.text) } : b))
+          .filter((b) => b.type !== "text" || b.text.length > 0);
+        if (kept.length > 0) working.push({ ...final, content: kept });
 
         const toolUses = final.content.filter(
           (b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use",
@@ -146,6 +150,7 @@ export class Orchestrator {
         if (stopReason !== "tool_use" || toolUses.length === 0) break;
 
         // すべてのツールの結果を1つのメッセージで返す
+        ranTools = true;
         const runs = await Promise.all(toolUses.map((u) => this.tools.run(u.name, u.input, { ...input.ctx, now })));
         const results = runs.map((r, i) => ({
           type: "tool_result" as const,
@@ -173,6 +178,7 @@ export class Orchestrator {
           for (const s of [...replySplitter.push(replies.join("")), ...replySplitter.flush()]) {
             if (!isSpeakable(s)) continue;
             clearFirst();
+            spokeAny = true;
             spoken.push(s);
             yield s;
           }
@@ -182,6 +188,8 @@ export class Orchestrator {
           }
         }
       }
+      // ツールも呼ばず、読み上げる文もなかった（「No reply」などを書いただけ）なら、話しかけでない声として履歴に残さない
+      if (!spokeAny && !ranTools) return;
       // 成功したときだけ履歴を確定する。外部サービスの元のブロック（thinking など）は履歴に残さない
       input.history.splice(
         0,

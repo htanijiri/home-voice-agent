@@ -39,6 +39,16 @@ for (const phrase of ["今日の夕飯なに食べたい？", "それでさ、�
     })) && ok;
 }
 
+// 相づちを拾ったとき、黙る代わりに「No reply」「[end_conversation]」や判断の説明を書いて読み上げない（017 のあとの実機）。
+// 読み上げる文がなければ、VoiceSession が黙って待機に戻す
+for (const phrase of ["うん", "へえ、そうなんだ", "あはは"]) {
+  ok =
+    (await repeat(`相づち「${phrase}」に何も言わない`, 5, async () => {
+      const { w, answer } = await afterQuestion(phrase);
+      return { ok: answer === "", detail: `ended=${w.ended()} / 「${answer}」` };
+    })) && ok;
+}
+
 ok =
   (await repeat("続けての頼みごとには答える", 5, async () => {
     const w = newWorld();

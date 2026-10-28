@@ -162,6 +162,27 @@ describe("読み上げない文", () => {
     expect(isSpeakable("MQTTのテストです。")).toBe(true);
     expect(isSpeakable("iPhoneの充電を忘れないでください。")).toBe(true);
     expect(isSpeakable("<thinking>")).toBe(false);
+    // 黙るときに、ツールの呼び出しや「返事なし」を文章で書いたもの（017 のあとの実機・評価で起きた）
+    expect(isSpeakable("No reply")).toBe(false);
+    expect(isSpeakable("No reply.")).toBe(false);
+    expect(isSpeakable("[end_conversation]")).toBe(false);
+    expect(isSpeakable("[ツール呼び出し: end_conversation]")).toBe(false);
+    expect(isSpeakable("[end_conversation は呼ばず、何も言わない]")).toBe(false);
+    expect(isSpeakable("［何も言わない］")).toBe(false);
+    expect(isSpeakable("これは続けての聞き取りで、アイリスへの話しかけではなさそうなので、何も返さず待機に戻ります。")).toBe(false);
+    expect(isSpeakable("このあと、何も言わずに待機に戻ります。")).toBe(false);
+    expect(isSpeakable("OK、追加しました。")).toBe(true);
+    expect(isSpeakable("話しかけてくれてありがとう。")).toBe(true);
+    expect(isSpeakable("OK")).toBe(true);
+    expect(isSpeakable("[牛乳]を追加しました。")).toBe(true);
+  });
+  it("「No reply」などだけを書いた回は、何も読み上げず、履歴にも残さない", async () => {
+    const llm = new FakeLlm([{ text: "No reply" }, { text: "[end_conversation]" }]);
+    const o = new Orchestrator(llm, new ToolRegistry(), "sys", () => "", new FakeClock(), cfg);
+    const history: ChatMessage[] = [];
+    expect(await collect(o.respond({ history, userText: "うん", ctx }))).toEqual([]);
+    expect(await collect(o.respond({ history, userText: "へえ", ctx }))).toEqual([]);
+    expect(history).toEqual([]);
   });
   it("漏れた英語を区切って取り除き、履歴にも残さない", async () => {
     const llm = new FakeLlm([{ text: "Ask: the list is empty, so adding milk is straightforward.牛乳を追加しました。" }]);

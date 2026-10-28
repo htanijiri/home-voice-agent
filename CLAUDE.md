@@ -61,7 +61,7 @@ home-voice-agent：M5Stack（AtomS3R＋Voice Pyramid）を、クラウドの LLM
 - `firmware/patches/0001-build-wakenet10-names.patch`：xiaozhi のビルドスクリプトが wn10 のウェイクワード名を受け付けないため。消すと「アイリス」でビルドできない。
 - `firmware/flash.sh` は esptool で `flash_args` の領域ごとに書き込む。`idf.py flash` に戻さない（再ビルドが始まり、Python の環境の違いで止まる）。`merged-binary.bin` を 0x0 に書かない（NVS の Wi-Fi の設定と承認が消える）。
 - `server/src/adapters/llm-anthropic.ts` の `thinking: { type: "adaptive" }` と `providerBlocks`：thinking をオフにすると、考えたこと（日本語や英語）を返事に書いて読み上げてしまう。thinking のブロックは、いまの返事の中でだけ返し、履歴に保存するときに外す（外さないと、履歴を切り詰めたときに Haiku 5.5 の検証で 400 になる）。
-- `server/src/core/sentence.ts` の `isSpeakable`：英字が大半の文を読み上げない安全網。
+- `server/src/core/sentence.ts` の `isSpeakable`：英字が大半の文を読み上げない安全網。黙るときに書かれる「No reply」「[end_conversation]」や、補足の言葉を使った判断の説明も落とす（消すと、それを読み上げ、履歴で真似して「ずっと No reply」になる）。
 - `server/src/app/hub.ts` の「audioOpen でないときの listen を無視」：会話を終えた直後に端末が送る listen start を受けると、待機中の端末に「聞き取れませんでした」と話しかけ続ける。
 - `server/src/transports/xiaozhi/opus.ts` の `sendPaced` の最後の 100ms：UDP の音声が「読み上げ終了」より後に着くと端末に捨てられる。
 - `server/src/app/server.ts` の close で WebSocket の接続を切る処理：切らないとサーバーの停止が終わらない。
